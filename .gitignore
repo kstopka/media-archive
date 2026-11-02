@@ -1,4 +1,39 @@
-
+# Private configuration; keep the sanitized template public.
 .env
-/reports
-/archive_docs
+.env.*
+!.env.examples
+
+# Local working documents and reports.
+/archive_docs/
+/reports/
+/.agents/
+/.codex/
+/.aws/
+
+# Runtime data and media must stay outside version control.
+/data/
+/media/
+/staging/
+/.media-archive/
+/.media-archive-staging/
+*.sqlite
+*.sqlite3
+*.db
+*.sqlite-*
+*.sqlite3-*
+*.db-*
+
+# Python environments, caches and build artifacts.
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+/build/
+/dist/
+*.egg-info/
