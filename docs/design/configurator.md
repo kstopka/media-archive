@@ -47,7 +47,7 @@ Source → IMPORT → staging → SORT → local collection
 
 All imports go through staging, even when the sorting rule is chosen during source setup. IMPORT and SORT remain independently invoked operations. Staging can hold files from multiple sources; each import retains its destination collection association. Staging itself is outside normal backup collections.
 
-Current configuration provides `plain`, `year_month` and `gopro_day` layouts. Phone collections currently require `year_month`, and camera collections require `gopro_day`; these are suitable defaults for current use, not a finished general-purpose sorting system. A deferred **configurable sorting rules** feature would let a collection select a reusable, named rule and later support other layouts. Its accepted inputs, destination mapping and compatibility behavior need a separate design before implementation. Introducing or changing a rule must not automatically reorganize existing files. Existing event folders remain untouched by SORT.
+Current configuration provides `plain`, `year_month` and `camera_day` layouts. Phone collections currently require `year_month`, and camera collections require `camera_day`; these are suitable defaults for current use, not a finished general-purpose sorting system. A deferred **configurable sorting rules** feature would let a collection select a reusable, named rule and later support other layouts. Its accepted inputs, destination mapping and compatibility behavior need a separate design before implementation. Introducing or changing a rule must not automatically reorganize existing files. Existing event folders remain untouched by SORT.
 
 ### Policy selection
 
@@ -60,7 +60,7 @@ Current configuration provides `plain`, `year_month` and `gopro_day` layouts. Ph
 
 Policies are reusable and do not follow from folder names. Explicit child rules override their nearest parent; other folders inherit the enclosing policy. Required copies under distinct paths remain distinct, even with identical content.
 
-The wizard must expose deletion eligibility explicitly. Selecting a policy does not approve a deletion list, inherit eligibility into a newly configured child rule, or silently expand the authorized cleanup scope. Missing sources or scan errors block deletion planning/execution. Existing compatibility configurations retain their established selection-stage/backlog boundaries.
+The wizard must expose deletion eligibility explicitly. Selecting a policy does not approve a deletion list, inherit eligibility into a newly configured child rule, or silently expand the authorized cleanup scope. Missing sources or scan errors block deletion planning/execution.
 
 ## 3. Create a backup profile
 

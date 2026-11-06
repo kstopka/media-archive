@@ -34,7 +34,7 @@ Paths below are relative to the repository root.
 | [src/media_archive/__main__.py](../src/media_archive/__main__.py) | Call CLI `main()` and propagate its exit status for `python -m media_archive` |
 | [src/media_archive/cli.py](../src/media_archive/cli.py) | Parse arguments, display help, invoke the configuration loader and print safe Polish diagnostics |
 | [config/__init__.py](../src/media_archive/config/__init__.py) | Public configuration imports |
-| [config/loader.py](../src/media_archive/config/loader.py) | Read one file, choose schema, validate the resulting configuration |
+| [config/loader.py](../src/media_archive/config/loader.py) | Read one registry configuration file, validate the resulting configuration |
 | [config/env.py](../src/media_archive/config/env.py) | Allowed keys, syntax parsing and registry-list parsing |
 | [config/registry.py](../src/media_archive/config/registry.py) | Translate registry-based `.env` settings into DTOs |
 | [config/builders.py](../src/media_archive/config/builders.py) | Select exact fields and translate Pydantic errors without private inputs |
@@ -45,7 +45,6 @@ Paths below are relative to the repository root.
 | [config/field_types.py](../src/media_archive/config/field_types.py) | Reusable field types and validators |
 | [config/validation.py](../src/media_archive/config/validation.py) | Cross-model references, collection tree, source rules and storage boundaries |
 | [config/errors.py](../src/media_archive/config/errors.py) | `ConfigError`, a `ValueError` subclass with safe CLI messages |
-| [config/legacy/](../src/media_archive/config/legacy/) | Isolated validation and adaptation of older category-based settings |
 
 ## CLI execution
 
@@ -68,24 +67,19 @@ No IMPORT/SORT/BACKUP/AUDIT subcommands or `--dry-run` option exist yet.
 ```mermaid
 flowchart TD
     A[load_config: read one UTF-8 file] --> B[parse_env: syntax, keys, duplicates]
-    B --> C{Registry schema detected?}
-    C -->|yes| D[registry.load_registry]
-    C -->|no| E[legacy.loader.load_legacy]
-    E --> F[Legacy relationship validation]
-    F --> G[legacy.adapter: generic DTOs]
-    D --> H[validate_relationships]
-    G --> H
-    H --> I[Immutable Configuration]
+    B --> C[registry.load_registry: build DTOs]
+    C --> D[validate_relationships]
+    D --> E[Immutable Configuration]
 ```
 
 `load_config()` turns the supplied path into an absolute path, reads with `utf-8-sig`, and supports a UTF-8 BOM. Read/decoding failures become a generic `ConfigError` without the selected private path.
 
-Registry mode is selected if any of `COLLECTIONS`, `POLICIES`, `ARCHIVE_GROUPS`, `BACKUP_PROFILES` or their recognized per-entry keys is present. This selection does not depend on collection names. Mixed old category settings and new registry settings are rejected. The full schema contract is in [configuration.md](configuration.md).
+Only the registry schema is supported. Obsolete category-based settings are rejected as unknown keys. See [configuration.md](configuration.md).
 
 ## Domain relationships
 
 ```text
-PhoneProfile / GoProProfile --collection_id--> LocalCollection
+PhoneProfile / CameraProfile --collection_id--> LocalCollection
 LocalCollection --policy_id-----------------> BackupPolicy
 LocalCollection --parent_id (optional)-------> nearest parent collection
 BackupProfile --collection_ids--------------> root collections
@@ -95,7 +89,7 @@ LocalSettings ------------------------------> LocalVolume[], staging, undated
 
 The import source owns device connection details and an initialization-policy setting. A local collection owns its single local-root definition, layout, policy and archive-relative destination. A backup profile selects root collections and a disk group; children are policy overrides within those roots.
 
-Core models do not interpret names such as `main`, `secondary`, photos, documents or video as behavior. The compatibility adapter alone knows the previous fixed categories. Display labels, registry IDs, profile aliases and device identifiers have distinct purposes; see [configuration.md](configuration.md).
+Core models do not interpret names such as `main`, `secondary`, photos, documents or video as behavior. Display labels, registry IDs, profile aliases and device identifiers have distinct purposes; see [configuration.md](configuration.md).
 
 Source `LABEL` values are editable presentation text; `ALIAS` values remain persistent identity keys. The [identity guard](identities.md) compares a candidate configuration with supplied registered IDs. Task 1.3 must supply persisted registrations and enforce this guard at operation boundaries; loading configuration does not perform historical checks.
 

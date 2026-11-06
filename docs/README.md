@@ -22,7 +22,7 @@ For a configuration change, read the architecture and relevant configuration sec
 | Implemented feature | Technical reference |
 | --- | --- |
 | CLI help and configuration checks | [CLI contract](architecture.md#cli-execution) |
-| Configuration, collections, policies and legacy adapter | [Configuration reference](configuration.md) |
+| Configuration, collections, policies | [Configuration reference](configuration.md) |
 | Display names and identity checks | [Identity contract](identities.md) |
 
 As features grow, give each feature its own page and register it here. Before creating or editing a feature, read its technical reference and any linked AI-specific instructions. Shared architecture and development rules remain in their existing pages; create additional instruction files only when necessary.
@@ -45,7 +45,6 @@ These documents use neutral examples and do not depend on private planning notes
 | Configuration | Literal `.env` parsing, immutable models, references, collection trees and lexical storage validation |
 | Collections and policies | Configuration and pure lookup methods; no scanning or file mutations |
 | Sources/storage | Phone/camera/card and disk descriptions; no discovery or hardware verification |
-| Legacy `.env` | Read-only adapter producing the same generic runtime models |
 | Stable identity guard | In-memory comparison against supplied registrations; no persisted registry or automatic execution enforcement |
 | SQLite and history | Not implemented; no initialization state or registered destination locks |
 | IMPORT, SORT, BACKUP, AUDIT | Not implemented |

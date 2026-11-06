@@ -8,15 +8,15 @@ Import profiles use a stable `ALIAS` and a separate display `LABEL`. Collections
 PHONE_MAIN_ALIAS='main'
 PHONE_MAIN_LABEL='Travel phone'
 PHONE_MAIN_COLLECTION='photos_main'
-GOPRO_HERO8_ALIAS='hero8'
-GOPRO_HERO8_LABEL='Travel camera'
+CAMERA_HERO8_ALIAS='hero8'
+CAMERA_HERO8_LABEL='Travel camera'
 ```
 
-In [models.py](../src/media_archive/config/models.py), `PhoneProfile.alias` and `GoProProfile.alias` remain persistent source identities. Their `label` fields are nonblank display strings and may contain spaces or duplicate another display name. Change `LABEL` to rename a source; preserve `ALIAS`. Collection references and the legacy adapter's generated collection IDs never depend on labels.
+In [models.py](../src/media_archive/config/models.py), `PhoneProfile.alias` and `CameraProfile.alias` remain persistent source identities. Their `label` fields are nonblank display strings and may contain spaces or duplicate another display name. Change `LABEL` to rename a source; preserve `ALIAS`. Collection IDs do not depend on labels.
 
-The loaders default omitted labels to the source alias, preserving older `.env` files without rewriting them. Explicitly empty/whitespace-only labels fail validation. Both current and legacy named profiles accept `PHONE_<NAME>_LABEL` and `GOPRO_<NAME>_LABEL`. A global legacy camera accepts `GOPRO_LABEL`, keeping the alias `gopro`. Direct DTO construction requires a valid `label`; loader defaults are applied before model construction.
+The loader defaults omitted labels to the source alias. Explicitly blank labels fail validation. Named profiles accept PHONE_<NAME>_LABEL and CAMERA_<NAME>_LABEL. Direct DTO construction requires a label.
 
-Registry entry names select setting prefixes. Source aliases select persistent import history; collection/group/backup-profile IDs select their own registries. `config.phone('main')` and `config.gopro('hero8')` still look up exact aliases, not display labels. Existing source aliases are case-sensitive lookup keys; changing spelling/case is an identity change.
+Registry entry names select setting prefixes. Source aliases select persistent import history; collection/group/backup-profile IDs select their own registries. `config.phone('main')` and `config.camera('hero8')` still look up exact aliases, not display labels. Existing source aliases are case-sensitive lookup keys; changing spelling/case is an identity change.
 
 ## In-memory registration guard
 
@@ -24,7 +24,7 @@ Registry entry names select setting prefixes. Source aliases select persistent i
 
 | API | Contract |
 | --- | --- |
-| `ConfigurationIdentities` | Immutable DTO with `phones`, `gopros`, `collections`, `backup_profiles` and `archive_groups` frozensets; fields default to empty sets |
+| `ConfigurationIdentities` | Immutable DTO with `phones`, `cameras`, `collections`, `backup_profiles` and `archive_groups` frozensets; fields default to empty sets |
 | `configuration_identities(config)` | Return configured identity keys, excluding labels, paths, device identifiers and initialization-policy values; does not register anything |
 | `validate_registered_identities(config, registered)` | Reject any current key absent from the supplied registration state, raising a safe `ConfigError` with namespace names only |
 
@@ -59,4 +59,4 @@ An intentional ID rename/history reassignment needs a separately designed explic
 
 ## Verification
 
-[test_config_identities.py](../tests/test_config_identities.py) covers current/legacy label edits, omitted/blank/duplicate labels, legacy global cameras, changed IDs in all five namespaces, explicit new registration, removal without history deletion, device/policy changes and absence of writes. These tests verify the in-memory contract; they do not demonstrate SQLite persistence or execution-time enforcement, which remain future work.
+`tests/test_config_identities.py` covers editable/default/blank labels, registration guards, device replacement and no-write behavior. Camera configuration tests also preserve collection IDs and archive mappings across technical naming changes.

@@ -16,7 +16,7 @@ values: dict[str, str] = parse_env("APP_TIMEZONE='Europe/Warsaw'\n")
 
 `load_config(path: str | Path = ".env") -> Configuration` and `parse_env(text: str) -> dict[str, str]` raise `ConfigError` for configuration failures. Parsing alone does not validate required fields, types or relationships. No process-environment override, recursive loading, interpolation or shell execution is performed. `APP_CONFIG_FILE` is metadata; only the argument to `load_config()` selects the file.
 
-The package also exports `ConfigModel`, `AppSettings`, `LocalSettings`, `LocalVolume`, `PhoneDevice`, `PhoneProfile`, `GoProCard`, `GoProProfile`, `ArchiveTarget`, `ArchiveGroup`, `LocalCollection`, `BackupPolicy` and `BackupProfile`. The separate [identity API](identities.md) exports `ConfigurationIdentities`, `configuration_identities()` and `validate_registered_identities()`. Treat helpers in `registry.py`, `builders.py` and `legacy/` as implementation details.
+The package also exports `ConfigModel`, `AppSettings`, `LocalSettings`, `LocalVolume`, `PhoneDevice`, `PhoneProfile`, `CameraCard`, `CameraProfile`, `ArchiveTarget`, `ArchiveGroup`, `LocalCollection`, `BackupPolicy` and `BackupProfile`. The separate [identity API](identities.md) exports `ConfigurationIdentities`, `configuration_identities()` and `validate_registered_identities()`. Treat helpers in `registry.py` and `builders.py` as implementation details.
 
 ## Parsing and identifiers
 
@@ -26,7 +26,7 @@ The package also exports `ConfigModel`, `AppSettings`, `LocalSettings`, `LocalVo
 
 Archive groups are discovered from `ARCHIVE_GROUPS` or group-level `ROOT_RELATIVE`/`TARGETS` settings. Target settings alone do not introduce a group. Names such as `extra_target_group` and target names containing `_TARGET_` are valid: the archive-target regex checks syntax only, while the registry assigns each key using full known-group prefixes and any explicit target lists. If no group/target pair matches, loading fails; if several pairs remain possible, loading fails with an ambiguity error instead of choosing a prefix arbitrarily. For example, `ARCHIVE_EXTRA_TARGET_GROUP_TARGET_B_UUID` could mean group `extra` / target `group_target_b` or group `extra_target_group` / target `b`. Explicit lists can select one interpretation; if both are registered, rename an entry to avoid the colliding key. Target-name inference is scoped to the resolved group, preserving explicit order or sorting inferred names.
 
-`ALIAS` identifies a persistent import profile; it defaults to its registry name in lowercase and is not itself a `RegistryId`. Aliases and device identifiers retain supplied spelling. `LABEL` is editable display text: it defaults to the alias for sources and to the lowercase registry name for collections and backup profiles. Changing a label never changes identity or legacy-generated collection IDs; duplicate labels are allowed, blank labels are not. Unknown registered IDs require explicit registration under the [identity contract](identities.md); persistent enforcement belongs to SQLite task 1.3.
+`ALIAS` identifies a persistent import profile; it defaults to its registry name in lowercase and is not itself a `RegistryId`. Aliases and device identifiers retain supplied spelling. `LABEL` is editable display text: it defaults to the alias for sources and to the lowercase registry name for collections and backup profiles. Changing a label never changes identity; duplicate labels are allowed, blank labels are not. Unknown registered IDs require explicit registration under the [identity contract](identities.md); persistent enforcement belongs to SQLite task 1.3.
 
 List/field normalization is performed while loading. Lookup methods described below use **exact string equality**, so pass canonical lowercase registry IDs and exact configured aliases. They do not normalize query arguments.
 
@@ -68,7 +68,7 @@ All application fields and both local working directories are required. Retentio
 | `archive_relative` | `COLLECTION_<ID>_ARCHIVE_RELATIVE` | Required relative path below archive-group root |
 | `policy_id` | `COLLECTION_<ID>_POLICY` | Required policy reference |
 | `parent_id` | `COLLECTION_<ID>_PARENT` | Optional collection reference; empty/absent means `None` |
-| `layout` | `COLLECTION_<ID>_LAYOUT` | `plain` (default), `year_month`, `gopro_day` |
+| `layout` | `COLLECTION_<ID>_LAYOUT` | `plain` (default), `year_month`, `camera_day` |
 | `allow_delete` | `COLLECTION_<ID>_ALLOW_DELETE` | Pydantic boolean; default `False`; prefer `true`/`false` in `.env` |
 
 Policy settings describe future execution: `keep_both` preserves conflicting contents; `replace_verified` allows replacement after verification; `keep` retains locally missing archive files; `confirm_each_run` requires an exact deletion-list approval. No policy executes file operations today. `allow_delete` makes a specific collection eligible and never approves a list or grants inherited deletion eligibility.
@@ -90,9 +90,9 @@ Phone entries come from `PHONE_PROFILES` and use prefix `PHONE_<ID>_`:
 
 All transport/serial/camera fields empty or absent creates `device=None` and `enabled=False`. Any nonempty connection field requires a complete valid `PhoneDevice`. Inactive profiles still require a valid collection, layout and initialization policy. Initialization policies are settings only; no initialization status is persisted yet. The source directory is configured, not inferred from alias `main`.
 
-Camera entries come from `GOPRO_PROFILES`, with prefix `GOPRO_<ID>_`:
+Camera entries come from `CAMERA_PROFILES`, with prefix `CAMERA_<ID>_`:
 
-| Suffix | `GoProProfile` field | Type/default |
+| Suffix | `CameraProfile` field | Type/default |
 | --- | --- | --- |
 | `ALIAS` | `alias` | Identifier; defaults to lowercase registry name |
 | `LABEL` | `label` | Nonblank display string; defaults to alias |
@@ -102,9 +102,9 @@ Camera entries come from `GOPRO_PROFILES`, with prefix `GOPRO_<ID>_`:
 | `SOURCE_RELATIVE` | `source_relative` | Required relative source path |
 | `SOURCE_EXAMPLE_SUBDIR` | `source_example_subdir` | Optional relative path; empty/absent becomes `None` |
 | `IGNORE_EXTENSIONS` | `ignore_extensions` | Comma-separated extensions, trimmed and uppercased; default empty tuple |
-| `CARDS` | `cards` | Tuple of registered `GoProCard` objects selected by name; default empty tuple |
+| `CARDS` | `cards` | Tuple of registered `CameraCard` objects selected by name; default empty tuple |
 
-`GOPRO_CARDS` registers card names; `GOPRO_CARD_<ID>_UUID` sets each card's current UUID. The resulting `GoProCard` has a lowercase `alias` and optional `uuid`. Missing/empty UUID means unknown identity, not automatic trust. Camera profiles may have no cards during configuration; an assigned card must exist and cannot be assigned more than once.
+`CAMERA_CARDS` registers card names; `CAMERA_CARD_<ID>_UUID` sets each card's current UUID. The resulting `CameraCard` has a lowercase `alias` and optional `uuid`. Missing/empty UUID means unknown identity, not automatic trust. Camera profiles may have no cards during configuration; an assigned card must exist and cannot be assigned more than once.
 
 ### Archives and backup profiles
 
@@ -144,7 +144,7 @@ Camera entries come from `GOPRO_PROFILES`, with prefix `GOPRO_<ID>_`:
 | `_registries` | Unique IDs per registry; at least one policy, collection and local volume; unique local volume aliases |
 | `_collections` | Existing policies, unique local roots, membership in a registered local volume, exact nearest-parent declaration, preserved parent/child archive suffix, explicit deletion eligibility |
 | `_backups` | Existing groups/collections, nonempty profile scopes, root collections only, each root assigned at most once across profiles, nonempty archive targets, unique target aliases per group, no overlapping assigned archive scopes within a group, archive state folder outside audit roots |
-| `_sources` | Unique aliases within each source/card registry, unique active phone serials, exclusive card assignment, existing collection references, raw-media policy `keep_both` + `keep`, phone layout `year_month`, camera layout `gopro_day` |
+| `_sources` | Unique aliases within each source/card registry, unique active phone serials, exclusive card assignment, existing collection references, raw-media policy `keep_both` + `keep`, phone layout `year_month`, camera layout `camera_day` |
 | `_storage` | Case-insensitively unique known UUIDs across local/archive/card entries; disjoint volume/mount roots; staging and undated outside collections/archives and each other; configuration/database/reports mutually disjoint and outside data volumes/staging/undated |
 
 The layout restrictions above are current implementation constraints: arbitrary named sorting presets are not implemented. UUID/alias uniqueness checks use case-folding; path comparisons are lexical and case-sensitive, not an emulation of NTFS semantics.
@@ -153,11 +153,11 @@ Nested collections must declare their nearest containing collection even when th
 
 ## Lookup API on `Configuration`
 
-The aggregate contains `source_file`, `app`, `local`, `phones`, `gopros`, `gopro_cards`, `archive_groups`, `policies`, `collections` and `backup_profiles`.
+The aggregate contains `source_file`, `app`, `local`, `phones`, `cameras`, `camera_cards`, `archive_groups`, `policies`, `collections` and `backup_profiles`.
 
 | Method | Returns / contract |
 | --- | --- |
-| `phone(alias)` / `gopro(alias)` | Source profile by exact alias |
+| `phone(alias)` / `camera(alias)` | Source profile by exact alias |
 | `collection(id)` / `policy(id)` / `backup_profile(id)` / `archive_group(id)` | Corresponding DTO by canonical ID |
 | `ArchiveGroup.target(alias)` | Target by exact alias within that group |
 | `profile_collections(profile_id)` | Root collection DTOs, in configured profile order; does not expand children |
@@ -185,28 +185,17 @@ mapping = config.archive_mapping("photos_main", "data")
 
 `month_collections()` does not enumerate calendar months, check files/targets, filter completed months or deduplicate scanning of nested month-capable roots. `collection_for_path()` selects a policy boundary; it does not scan, hash, infer an EXIF date or authorize mutations. Actual transfer planning belongs to a later subsystem.
 
-## Legacy compatibility
+## Supported configuration format
 
-Without registry-schema markers, the loader invokes [legacy/adapter.py](../src/media_archive/config/legacy/adapter.py). It validates old settings through `legacy/loader.py`, `legacy/models.py` and `legacy/validation.py`, then converts them into current DTOs. The final generic relationship validator still runs. Neither configuration files nor media are rewritten.
+Only the registry-based format in `.env.examples` is supported. Loading always builds registry models and validates their relationships; there is no schema detection, compatibility adapter or automatic migration. Collections own paths and source profiles reference collection IDs. Category-based keys such as `LOCAL_PHOTOS_ROOT`, `PHONE_MAIN_DESTINATION_ROOT`, `PHOTO_*`, `DATA_ARCHIVE_*` and global camera settings are unknown parameters and raise a safe `ConfigError`. An incomplete registry configuration fails validation rather than falling back to another format.
 
-Supported older settings include `LOCAL_VOLUME_ROOT/UUID`, `LOCAL_MAIN_MEDIA_ROOT`, `LOCAL_SECONDARY_MEDIA_ROOT`, per-source `DESTINATION_ROOT`, the PHOTO workflow fields, DATA/VIDEO archive fields, and global GOPRO model/source settings. The prior named phone/camera/local-volume/target lists remain supported by that branch. Mixing old global camera settings with named camera profiles is rejected.
+Tests cover registry parsing, required values, relationships, identity, privacy, read-only loading and rejection of obsolete keys. Existing configuration files must be manually expressed in the supported schema before use; loading never rewrites files.
 
-Legacy profiles accept optional display labels without changing their aliases or generated collection IDs. The global camera spelling is `GOPRO_LABEL`; named sources use the same `PHONE_<NAME>_LABEL` / `GOPRO_<NAME>_LABEL` fields as the current schema. Omitted labels fall back to the alias.
+## Camera naming and API changes
 
-Generated compatibility identities:
+Camera configuration uses `CameraProfile`, `CameraCard`, `Configuration.cameras`, `Configuration.camera_cards` and `camera(alias)`. The registration DTO uses the `cameras` namespace. Settings use `CAMERA_PROFILES`, `CAMERA_CARDS`, `CAMERA_<ID>_*` and `CAMERA_CARD_<ID>_UUID`. The camera layout is `camera_day`, with unchanged day-layout semantics and source validation requirements; this naming does not add device support or arbitrary sorting rules.
 
-| Object | Generated identity |
-| --- | --- |
-| Root collections | `photos`, `documents`, `gopro` |
-| Phone child | `photos_` + encoded profile alias (see below); default aliases yield `photos_main` and `photos_secondary` |
-| Camera child | `camera_` + similarly encoded alias; uses `gopro` directly if its root matches |
-| Workflow children | `review`, `reviewed`, `sent`, `backlog`, `printed` |
-| Policies | `append`, `documents`, `selection`, `backlog` |
-| Groups/profiles | `data`, `video` |
-
-Alias encoding preserves ASCII lowercase letters and digits; every other character, including `_`, is escaped as `_` + its lowercase hexadecimal Unicode code point + `_`. This deterministic, collision-free encoding preserves spelling: `foo-bar` becomes `foo_2d_bar`, while `foo_bar` becomes `foo_5f_bar`. Custom aliases containing uppercase letters, underscores or punctuation therefore have different generated IDs than with the former lossy normalization. Carry these IDs into explicit registry entries when converting formats. Regression tests in `tests/test_collection_config.py` cover phone and camera aliases, literal escape sequences, Unicode and profile-order independence.
-
-The adapter preserves paths and source aliases, derives nearest parents and grants deletion eligibility only to the legacy selection/backlog stages. It retains the old format's category-specific validation. Default collection, policy, archive-group and backup-profile IDs match the current public template; converting formats does not require renaming them. For custom source aliases or additional collections, carry the adapter-generated collection IDs into explicit registry entries and update all references consistently. Preserve actual paths and source aliases too: the template's example layout and device names do not automatically describe an existing installation. A global legacy camera profile has alias `gopro`; a named replacement must retain that alias when preserving its history. This is configuration compatibility, not an implemented database identity migration. Do not blindly replace an old `.env` with the template.
+Update Python callers, serialized configuration/registration DTO field names, setting prefixes and layout values to these names. The former brand-specific API, `GOPRO_*` settings and `gopro_day` layout are not supported. There is no compatibility loader or automatic migration. Do not rename aliases, collection IDs, UUIDs or paths: the example collection ID `gopro`, its `COLLECTION_GOPRO_*` settings and source folder `100GOPRO` remain valid data. Tests cover the camera API, unchanged collection references/archive mappings/card identities, and rejection of obsolete settings even alongside valid camera settings.
 
 ## Errors and current limits
 

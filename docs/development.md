@@ -33,15 +33,11 @@ The last recorded code verification, after separating display labels and adding 
 
 | File | Coverage |
 | --- | --- |
-| [test_cli.py](../tests/test_cli.py) | Installed-package subprocess in isolated Python mode (`-I`), help, both configuration formats, argument errors, exit codes, private-value diagnostics and absence of new runtime files |
-| [test_config.py](../tests/test_config.py) | Parser syntax/literals, required values, immutable/private DTOs, path/UUID boundaries, file encodings and safe failures; configuration cases use legacy fixtures |
-| [test_config_flexibility.py](../tests/test_config_flexibility.py) | Legacy-format regression scenarios: extra profiles/cards/volumes, device replacement, archive continuation, inferred lists, shared prefixes and compatibility |
-| [test_collection_config.py](../tests/test_collection_config.py) | Current generic model: root/month scopes, nearest policy, new profiles/volumes, unassigned collections, reference/tree/storage rejection, explicit deletion eligibility, compatibility types/default IDs, no-write behavior and archive names with `_TARGET_`/ambiguous prefixes |
-| [test_config_identities.py](../tests/test_config_identities.py) | Display label edits/defaults across formats, unknown IDs and explicit registration, retained offline identities, hardware changes and no-write checks |
-| [config_fixtures.py](../tests/config_fixtures.py) | Synthetic current/legacy settings and temporary-file writer |
-| [fixtures/legacy-config.txt](../tests/fixtures/legacy-config.txt) | Frozen sanitized previous schema; keep independent of the current template |
+| [test_cli.py](../tests/test_cli.py) | Installed-package subprocess in isolated Python mode (`-I`), help, the registry configuration, argument errors, exit codes, private-value diagnostics and absence of new runtime files |
+| [test_collection_config.py](../tests/test_collection_config.py) | Current generic model: root/month scopes, nearest policy, new profiles/volumes, unassigned collections, reference/tree/storage rejection, explicit deletion eligibility, no-write behavior and archive names with `_TARGET_`/ambiguous prefixes |
+| [test_config_identities.py](../tests/test_config_identities.py) | Display label edits/defaults , unknown IDs and explicit registration, retained offline identities, hardware changes and no-write checks |
 
-`registry_values(root)` reads [.env.examples](../.env.examples), replaces example paths with paths under a test temporary directory, and replaces device placeholders with synthetic IDs. `configuration_values(root)` does the same with the frozen legacy fixture. Both return settings dictionaries; `write_config(path, values)` writes a temporary `.env` for tests. Fixture parsing uses `dotenv_values(interpolate=False)`; the production parser separately tests syntax-error and duplicate handling through `parse_stream`.
+`registry_values(root)` reads `.env.examples` and substitutes temporary paths and synthetic identifiers. `write_config` writes only temporary test configuration files. Parser and model tests cover required values, immutable/private DTOs and obsolete-key rejection. Flexibility tests cover source replacement, extra cards/volumes and archive continuation.
 
 Use synthetic data and temporary directories. Do not turn `.env`, connected phones, cards or archives into required test fixtures. Current tests do not demonstrate actual transfers, full archive hashes, physical identity verification, interruption recovery or database durability.
 
@@ -55,7 +51,6 @@ Use synthetic data and temporary directories. Do not turn `.env`, connected phon
 | Cross-model invariant | `config/validation.py` | Generic collection tests and relationship-validation table |
 | Collection lookup/scope | `config/collections.py`, `config/models.py` | API tests and lookup-contract table |
 | Display labels/identity registration contract | `config/identities.py`, source DTOs and loaders | Identity tests, `docs/identities.md`, configuration reference and future state-layer integration |
-| Compatibility behavior | `config/legacy/` | Frozen-fixture regression tests and compatibility section |
 | Dependency | `pyproject.toml` | Explain purpose and obtain the user's decision before introducing a new library; update dependency documentation |
 | New subsystem | New focused package/module | Its own technical page linked from `docs/README.md`, tests and capability status |
 

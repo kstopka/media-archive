@@ -5,8 +5,7 @@
 Start with [docs/README.md](docs/README.md), then the relevant feature reference: [CLI](docs/architecture.md#cli-execution), [configuration](docs/configuration.md) or [identities](docs/identities.md). Read affected source afterward.
 
 - `src/media_archive/`: Python package; `cli.py` handles arguments, `config/` handles configuration.
-- `src/media_archive/config/legacy/`: compatibility adapter; keep historical category assumptions isolated here.
-- `tests/`: unittest suites and synthetic/legacy fixtures.
+- `tests/`: unittest suites and synthetic fixtures.
 - `docs/`: public technical documentation, organized by feature as the application grows.
 - `archive_docs/`: ignored local plans, when present; distinguish planned behavior from implemented features.
 
@@ -33,7 +32,7 @@ Use four-space indentation, type hints, `snake_case` functions and `PascalCase` 
 
 ## Testing Guidelines
 
-Use `unittest`, `test_*.py` files and `test_*` methods. Cover changed contracts, invalid inputs, privacy and unintended writes using temporary directories and synthetic identities. Preserve legacy regressions; never require connected media. No coverage threshold is configured.
+Use `unittest`, `test_*.py` files and `test_*` methods. Cover changed contracts, invalid inputs, privacy and unintended writes using temporary directories and synthetic identities. Use only the registry configuration schema; never require connected media. No coverage threshold is configured.
 
 ## Feature Workflow
 
