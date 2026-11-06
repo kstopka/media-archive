@@ -46,6 +46,8 @@ Both modes subsequently use incremental history. Incomplete inventory cannot jus
 
 Later imports list the configured source, hash stable content, compare profile-specific history/dispositions, preflight staging space, transfer and independently verify the copy before recording success. Local selection/deletion must not erase the import record. Reimport requires an explicit choice rather than a silent history reset.
 
+Track verified import completion, current verified staging presence and successful placement in the collection separately. An interrupted SORT leaves work pending against the existing staging copy. If that copy disappears before placement, report missing pending material and offer explicit reimport while preserving the previous import event. Acceptance must cover interruption and manual staging removal between IMPORT and SORT.
+
 ## 4. Sorting, dates and conflicts
 
 SORT handles verified staging content only. Read embedded metadata without changing the original bytes:
@@ -89,6 +91,10 @@ Allow one target and a partial-copy status; a later run fills the missing second
 
 Read-only targets remain available to inventory/audit but receive no media writes, replacements, deletions or state snapshots. Extending an archive retains old disk identities; adding a disk does not migrate existing data.
 
+### Successive archive pairs
+
+Persist the required target pair for each material occurrence and its required archive path. When an existing pair becomes full, the operator explicitly switches the pair used for newly assigned material. Previously assigned material retains its original pair, including pending second copies. Adding or selecting a new pair alone must preserve these assignments. Readiness checks and missing-copy planning use the material's recorded pair. For example, earlier material assigned to A/B stays on A/B after new material starts using C/D. Transfer to a different pair requires a separate explicit migration design.
+
 ### Fresh proof before manual local-space release
 
 The operator accepts the additional read time: before indicating that a selected local scope can be released manually, independently read and SHA-256-verify both required archive copies of its current contents on two distinct connected physical disks.
@@ -101,6 +107,8 @@ The operator accepts the additional read time: before indicating that a selected
 - Read-only archive targets may supply fresh verification evidence because this check only reads them. A positive result never deletes local files automatically.
 
 Required acceptance cases: two fresh matching reads allow readiness; a historical-only/offline copy does not; a corrupt existing copy blocks readiness despite unchanged size; a freshly verified new transfer is not redundantly rehashed; interruption cannot report unchecked files as ready.
+
+Manual-space-release guidance follows the effective backup policy at each selected path, including explicit child overrides. Paths with `deletions=keep` are eligible after the required fresh verification. Paths with `deletions=confirm_each_run` require a warning that subsequent backup may propose deleting their archive copies after local removal. Report these paths separately from files eligible for retained-archive space release. Catalog names and source profiles do not determine eligibility. Existing per-run exact deletion approval remains required.
 
 ## 6. Planned identity and SQLite model
 
@@ -125,8 +133,8 @@ Proposed state groups, not finalized SQL tables:
 | Collections and backup assignments | IDs, policies, local roots, registered archive mappings and history |
 | Devices and volumes | Roles, filesystem episodes, identity evidence and last-known locations |
 | Contents and observations | Full hash/size, source paths/attributes, observation time and certainty |
-| Imports and dispositions | Verified success, explicit baseline skip/rejection/reimport, reasons and scope |
-| Local/archive instances | Content, required path, location, last-confirmed presence time and associated verification |
+| Imports and dispositions | Verified import completion, staging presence, collection placement, explicit baseline skip/rejection/reimport, reasons and scope |
+| Local/archive instances | Content, required path, assigned target pair, location, last-confirmed presence time and associated verification |
 | Metadata and conflicts | Raw date fields, interpretation/manual decisions, variants and review results |
 | Runs, operations and verifications | Plans, attempts, temporary files, progress, errors; verification time, run ID, file/disk/path and read scope, algorithm, expected/read hashes and result, separate from presence observations |
 | Audits and migrations | Scope/findings/completeness and schema version changes |
@@ -160,6 +168,12 @@ Use short database transactions and coordinated writes; do not keep a transactio
 ## 7. Audit, reporting and recovery
 
 AUDIT reads complete configured archive roots, including existing content outside currently assigned backup collections. Quick mode compares paths/types/sizes; full mode independently hashes file occurrences. Report only-on-one-side entries, content differences, naming conflicts, read errors and incomplete scopes. Resuming must invalidate evidence for changed files; an inventory is not an atomic snapshot.
+
+### Explicit copy repair
+
+AUDIT reports damaged copies. A separately invoked repair action presents the affected content, a source verified against its expected SHA-256 and the exact destination for approval. A surviving archive copy can supply the source when local content has been removed. Publish a verified replacement through the safe transfer/journal mechanism and record new evidence. An unresolved expected hash or absence of a matching source blocks repair. Acceptance must cover one damaged archive copy with a valid surviving copy and no local original, interruption during replacement and absence of any valid source.
+
+### Reports and state recovery
 
 Reports are Polish text and JSON, with run IDs, scope, target outcomes, counts, errors, conflicts and unverified files. Retain 20 completed report runs; preserve import history and required resume state independently. Final operational exit/resume contracts remain to be specified; currently only configuration/help statuses 0/2 exist.
 

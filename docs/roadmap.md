@@ -37,6 +37,7 @@ This stage provides inventory primitives, not media transfers.
 
 - [ ] **3.1 Quick inventories and comparison.** Scan complete registered archive roots, recording paths, types, sizes, errors and incompleteness. Attribute agreement must never be reported as verified content agreement.
 - [ ] **3.2 Full resumable AUDIT.** Hash contents with checkpoints, progress and sequential disk attachment. Revalidate changed files after resuming; report exactly which scope was verified.
+- [ ] **3.2a Explicit copy repair.** Deliver after the shared verified-transfer mechanism in 4.1. Present a verified source and exact destination for approval, including recovery from a surviving archive copy after local removal. See [repair design](design/archive-workflows.md#explicit-copy-repair).
 - [ ] **3.3 Initial existing-data inventory.** Record local collections and all required archives, preserving progress while disks are offline. Existing files are observations, not fabricated successful imports. No automatic reorganization of existing collections.
 - [ ] **3.4 Source baseline initialization.** Persist the scope/boundary of a phone baseline; apply `baseline_skip_missing` only when comparison is complete. Phone-only baseline content may be skipped, never marked imported or archived. `import_missing` fills initial gaps; subsequent imports share incremental history behavior. Camera sources do not inherit the phone baseline exception.
 
@@ -48,7 +49,7 @@ After acceptance, inventory/audit can be used without waiting for IMPORT/SORT/BA
 - [ ] **4.2 Import planning.** Source manifests, observations, per-profile dispositions and staging-space preflight. Hash identity in another profile must not suppress a required distinct occurrence.
 - [ ] **4.3 Camera import.** Videos/photos, configured exclusions, reporting of unsupported types and content recognition despite formatting or reused names. Preserve source cards; reject hash mismatches.
 - [ ] **4.4 Phone import through ADB.** Apply baseline dispositions and import new content, handling authorization/offline states. Preserve phone originals.
-- [ ] **4.5 Resume and import history.** Journal attempts, reconcile interruptions and retain history after manual selection. Failed/unverified transfers cannot produce success records.
+- [ ] **4.5 Resume and import history.** Journal attempts, reconcile interruptions and retain history after manual selection. Distinguish verified import, staging presence and completed collection placement. Missing staging before SORT completion requires a visible pending-material error and explicit reimport. Failed/unverified transfers cannot produce success records.
 
 ## Stage 5 — SORT and catalog
 
@@ -58,6 +59,8 @@ After acceptance, inventory/audit can be used without waiting for IMPORT/SORT/BA
 - [ ] **5.4 Search and conflict review.** Search by name/month/source, show last-known offline locations and reconcile manual moves. Resolving a conflict as “keep both” must not delete either variant.
 
 ## Stage 6 — BACKUP with mandatory snapshots
+
+Target planning must persist each material occurrence's required pair. An explicit switch assigns new material to the new pair while earlier material and pending second copies retain their original assignments. See [successive archive pairs](design/archive-workflows.md#successive-archive-pairs). Manual-space-release guidance uses each path's effective deletion policy, including child overrides. Retention paths are eligible after fresh verification. Paths that propagate approved deletions require a separate warning about subsequent archive cleanup.
 
 - [ ] **6.1 Scope and policies.** Manually enter backup, identify/select connected targets and propose a matching profile. Profile All includes assigned roots; collection All includes its complete tree. Month scopes combine configured dated roots and appear only for work pending on selected connected targets. Plain collections have no month submenu.
 - [ ] **6.2 Targets and capacity.** Validate independent disks and preflight the entire selected batch, including temporary files, replacements, snapshots and at least 1 GiB reserve. Insufficient space on any selected available target blocks the whole batch before transfer or cleanup.

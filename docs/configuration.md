@@ -129,7 +129,7 @@ Camera entries come from `GOPRO_PROFILES`, with prefix `GOPRO_<ID>_`:
 
 [field_types.py](../src/media_archive/config/field_types.py) centralizes these constraints:
 
-- Absolute data paths cannot be `/`, relative, or contain `..`; no filesystem existence is required. `Path` performs lexical normalization, not symlink resolution.
+- Absolute data paths cannot be `/`, relative, or contain `..`. On Linux, a leading `//` is normalized to `/` before validation and storage-boundary comparisons. Paths distinguish uppercase and lowercase characters, including when checking collection-root uniqueness. No filesystem existence is required. `Path` performs lexical normalization without resolving symlinks.
 - Relative paths cannot be absolute, empty/`.` or contain `..` or backslashes. `PurePosixPath` normalizes separators and `.` components. A single-folder value adds a one-component constraint.
 - Identifiers contain no whitespace or slashes/backslashes; values beginning `REPLACE_WITH_` are rejected. Registry IDs use the stricter registry-name grammar.
 - Counts/reserve accept unambiguous decimal strings or Python integers; fractional/exponent forms and booleans are rejected. Counts are positive and reserve is at least 1 GiB.
@@ -198,11 +198,13 @@ Generated compatibility identities:
 | Object | Generated identity |
 | --- | --- |
 | Root collections | `photos`, `documents`, `gopro` |
-| Phone child | `photos_` + lowercase profile alias, replacing non-`[a-z0-9_]` characters with `_`; default aliases yield `photos_main` and `photos_secondary` |
-| Camera child | `camera_` + similarly normalized alias; uses `gopro` directly if its root matches |
+| Phone child | `photos_` + encoded profile alias (see below); default aliases yield `photos_main` and `photos_secondary` |
+| Camera child | `camera_` + similarly encoded alias; uses `gopro` directly if its root matches |
 | Workflow children | `review`, `reviewed`, `sent`, `backlog`, `printed` |
 | Policies | `append`, `documents`, `selection`, `backlog` |
 | Groups/profiles | `data`, `video` |
+
+Alias encoding preserves ASCII lowercase letters and digits; every other character, including `_`, is escaped as `_` + its lowercase hexadecimal Unicode code point + `_`. This deterministic, collision-free encoding preserves spelling: `foo-bar` becomes `foo_2d_bar`, while `foo_bar` becomes `foo_5f_bar`. Custom aliases containing uppercase letters, underscores or punctuation therefore have different generated IDs than with the former lossy normalization. Carry these IDs into explicit registry entries when converting formats. Regression tests in `tests/test_collection_config.py` cover phone and camera aliases, literal escape sequences, Unicode and profile-order independence.
 
 The adapter preserves paths and source aliases, derives nearest parents and grants deletion eligibility only to the legacy selection/backlog stages. It retains the old format's category-specific validation. Default collection, policy, archive-group and backup-profile IDs match the current public template; converting formats does not require renaming them. For custom source aliases or additional collections, carry the adapter-generated collection IDs into explicit registry entries and update all references consistently. Preserve actual paths and source aliases too: the template's example layout and device names do not automatically describe an existing installation. A global legacy camera profile has alias `gopro`; a named replacement must retain that alias when preserving its history. This is configuration compatibility, not an implemented database identity migration. Do not blindly replace an old `.env` with the template.
 
