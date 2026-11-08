@@ -141,13 +141,17 @@ Proposed state groups, not finalized SQL tables:
 
 Use foreign keys, uniqueness constraints and indexes to prevent duplicate history while preserving intentional occurrences. Exact DDL belongs to task 1.3 and later schema migrations as features are delivered.
 
+Store shared profile, collection, device and volume definitions once and reference their IDs from history. Each import must retain its source profile, actual source device/volume episode where applicable, observed source path, content and destination occurrence through these references. Each archive copy must retain its actual volume episode and relative path. Preserve historical associations when current paths or devices change. Required target assignments also exist for copies still pending. Database-size estimates belong to the finalized schema and representative synthetic data.
+
 The configuration layer implements a [pure identity guard](../identities.md). The state layer must load registered keys and enforce it before execution: unknown IDs require explicit registration, never automatic history creation or initialization restart. Labels remain freely editable. Removed entries retain history; intentional ID renames require a separate explicit design rather than inference from paths, labels or hardware.
 
 ### Destination registration
 
-At first explicit registration, persist the normalized archive root plus collection-relative destination. Subsequent operations using a changed v1 mapping must fail before media writes. Reading `.env`, `--check-config` and dry-run never register or lock destinations.
+At first explicit registration, persist the collection ID, archive group ID and normalized archive root plus collection-relative destination, including effective mappings for child collections. Subsequent operations using a changed v1 mapping or archive-group association must fail before media writes. Reading `.env`, `--check-config` and dry-run never register or lock destinations.
 
 Changing the local root with the same collection ID does not reset import history or move existing files. Updating the mount of the same disk or adding a disk with the same archive layout does not change the archive mapping. Historical copy evidence remains tied to its actual disk/path/content.
+
+A collection may be registered while it has no backup assignment. Register its archive mapping explicitly when an archive group is first assigned, including inherited child mappings. Removing a current assignment must retain existing mapping locks and history so that removing and re-adding configuration cannot bypass them.
 
 A separate post-v1 feature may offer verified destination migration or a new destination history with an explicit old-content cutoff. Preserve previous files and history; do not implement either mode by resetting global import memory or editing `.env` alone.
 
@@ -163,7 +167,28 @@ Additional states may include `interrupted`, `failed`, `conflict` and `needs_rev
 
 The filesystem and SQLite do not share a transaction. Record durable intent, transfer to a target-filesystem temporary file, verify, persist file data, publish using the applicable policy, persist directory metadata where supported, then commit evidence. Reconcile actual files and journal state after crashes between publication and database commit. Publication guarantees require filesystem-specific tests.
 
+Only the final database commit records operation completion. A crash after publication leaves an unfinished journal entry even if the destination file exists. Recovery must validate the destination and reconcile evidence before recording completion, retaining attempt history and preventing duplicate success records. Task 1.3 tests persistent journal transitions, retries and completion constraints with synthetic evidence. Task 4.1 adds end-to-end crash tests around actual transfer, verification and publication using temporary files and directories.
+
 Use short database transactions and coordinated writes; do not keep a transaction open throughout a large transfer. Lock colliding operations over the same area. Copy status is per current content/required location, not one global run flag, and distinct registered volumes must be checked for physical independence.
+
+### Agreed requirements for task 1.3
+
+These four requirements define the accepted state-layer behavior for implementation and review. Task 1.3 remains planned.
+
+1. **Explicit device registration.** Persist stable device IDs and associations with source profiles and filesystem episodes. A replacement phone or changed UUID requires explicit registration of the association while preserving previous history. Keep actual source and destination identities and paths accessible from each operation's history through stable references.
+2. **Deferred archive assignment and retained destination locks.** Allow a collection to be registered before its archive targets are selected. At its first explicit archive assignment, register the group and relative destination, including effective child mappings. Retain those locks after removing configuration entries. For example, removing and re-adding a collection cannot silently change its destination from `Archive/Films` to `Archive/OtherFilms`. Apply the same historical mapping checks on re-addition.
+3. **Safe schema migrations and operation concurrency.** A migration updates database structure when application versions add or change tables. Apply each migration atomically so failure preserves the preceding valid schema and history. Protect conflicting file operations for their full lifetime, including transfer time between short database transactions. For example, a second BACKUP targeting the same destination must not race an unfinished BACKUP. Independent operations may proceed concurrently when their scopes permit it. Tests must cover migration failure, conflicting processes, interruption and safe recovery.
+4. **Durable history and explicit initialization progress.** Report-file rotation preserves database history, verification evidence and required run references. For example, after a backup of 100 photos, removing its text/JSON reports outside the retention limit preserves the recorded copy outcomes and verification evidence. Registering a source leaves its initialization pending. Later initialization workflows record progress and mark completion only after the required comparison and processing have finished. Interrupted initialization retains progress for resumption. Manual selection or local removal preserves prior import history.
+
+### Foundation acceptance for task 1.3
+
+- Explicit creation establishes application identity and a supported schema version. Opening an unrelated, corrupt or newer unsupported database fails safely. Schema migration failure must preserve the previous valid schema and history, and normal reads and dry runs must not migrate it.
+- Enforce foreign keys and uniqueness constraints on every applicable write connection. Retrying one operation must preserve its attempts and commit its result at most once. Distinct occurrences of equal content must remain distinct, including after local removal or verified replacement at a reused path.
+- Concurrency tests must use separate database connections/processes and cover a conflicting operation and process termination. SQLite transaction locking alone does not protect a file transfer between short transactions. Recovery must establish that the prior owner has stopped before taking over unfinished work.
+- Source initialization progress must survive interruption and changes to labels, configured initial policy or hardware. Completion and baseline decisions require evidence supplied by the later inventory/initialization workflows. Creating the database or registering a profile cannot mark initialization complete.
+- Separate report retention from durable history and evidence. Removing a completed report must preserve run references needed by verifications, imports and recovery.
+
+Detailed SQL tables, indexes and internal state APIs are implementation decisions within these contracts. Later features may add migrations for their own entities. Tests for this foundation use temporary state and synthetic records.
 
 ## 7. Audit, reporting and recovery
 
