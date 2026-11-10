@@ -1,6 +1,6 @@
 # Architecture
 
-Scope: implemented tasks 1.1–1.2a. The application currently reads and validates configuration; it does not manage media or persistent state.
+Scope includes implemented tasks 1.1–1.2a and 1.3.1. The CLI reads and validates configuration. A separate [SQLite state API](state.md) provides explicit database lifecycle and migrations.
 
 ## Runtime and dependencies
 
@@ -8,11 +8,13 @@ Scope: implemented tasks 1.1–1.2a. The application currently reads and validat
 
 | Dependency | Declared range | Responsibility |
 | --- | --- | --- |
+| Alembic | `>=1.20,<2` | Versioned SQLite schema revisions |
 | python-dotenv | `>=1.2.4,<1.3` | Parse `.env` assignments without interpolation |
 | Pydantic | `>=2.12,<3` | Immutable DTOs, field types and field validation |
-| Python standard library | Python >=3.11 | argparse, pathlib, zoneinfo, unittest and supporting utilities |
+| SQLAlchemy Core | `>=2.1,<2.2` | Database connections and transactions |
+| Python standard library | Python >=3.11 | sqlite3, argparse, pathlib, zoneinfo, unittest and supporting utilities |
 
-The repository uses a **src layout**: application packages live under `src/media_archive/`, while tests and documentation remain at the root. Setuptools maps the package root to `src` and discovers `media_archive*` packages there, disables namespace packages and excludes package data. Documentation/tests are repository resources, not runtime package data. SQLite, ExifTool, ADB and rsync are intended future components; the current configuration path does not invoke them.
+The repository uses a **src layout**: application packages live under `src/media_archive/`, while tests and documentation remain at the root. Setuptools maps the package root to `src` and discovers `media_archive*` packages there, disables namespace packages and excludes package data. Documentation/tests are repository resources, not runtime package data. SQLite is available through the explicit state API. ExifTool, ADB and rsync remain future components. The configuration path does not invoke any of these components.
 
 ```text
 repository/
@@ -45,6 +47,10 @@ Paths below are relative to the repository root.
 | [config/field_types.py](../src/media_archive/config/field_types.py) | Reusable field types and validators |
 | [config/validation.py](../src/media_archive/config/validation.py) | Cross-model references, collection tree, source rules and storage boundaries |
 | [config/errors.py](../src/media_archive/config/errors.py) | `ConfigError`, a `ValueError` subclass with safe CLI messages |
+| [state/database.py](../src/media_archive/state/database.py) | Explicit creation/opening, connection lifetime, short transactions and migration entry point |
+| [state/migrations.py](../src/media_archive/state/migrations.py) | Application identity, Alembic revision validation and migration entry point |
+| [state/revisions/](../src/media_archive/state/revisions/) | Packaged Alembic environment and schema revisions |
+| [state/errors.py](../src/media_archive/state/errors.py) | Safe `StateError` diagnostics |
 
 ## CLI execution
 
@@ -101,4 +107,4 @@ Pydantic field validation establishes individual value types. `validate_relation
 
 Collection helper methods resolve configuration scopes and policies only. They do not generate a transfer plan, find actual months, check connected targets, deduplicate files by hash, confirm deletions or establish verified copies.
 
-`Configuration.archive_mapping()` prepares a normalized relative mapping string. No historical comparison or lock is implemented. Persisting registrations and blocking destination changes belong to the future SQLite subsystem. A mounted path or configured UUID is not proof of physical device identity; runtime verification remains future work.
+`Configuration.archive_mapping()` prepares a normalized relative mapping string. No historical comparison or lock is implemented. Persisting registrations and blocking destination changes belong to task 1.3.2, building on the [state foundation](state.md). A mounted path or configured UUID is not proof of physical device identity; runtime verification remains future work.

@@ -27,7 +27,7 @@ Targeted examples:
 git diff --check
 ```
 
-The last recorded code verification, after separating display labels and adding the in-memory identity guard, passed **84 tests on Python 3.14.4**, including `-W error` and installed-package CLI checks. Both module and console entry points were also checked from outside the repository during the src-layout migration. This is a past result, not a substitute for running relevant tests after a new code change. Python 3.11 syntax compatibility was checked with `ast.parse(feature_version=(3, 11))`; execution of the test suite on Python 3.11 has not been established by that check.
+The SQLite foundation verification passed **122 tests on Python 3.14.4 with SQLite 3.46.1**, SQLAlchemy 2.1.8 and Alembic 1.20.1. The run used `-W error` and included 36 state tests and installed-package subprocess checks. Python 3.11 syntax compatibility was checked with `ast.parse(feature_version=(3, 11))`. The runtime test suite was not executed on Python 3.11.
 
 ## Test map
 
@@ -36,10 +36,11 @@ The last recorded code verification, after separating display labels and adding 
 | [test_cli.py](../tests/test_cli.py) | Installed-package subprocess in isolated Python mode (`-I`), help, the registry configuration, argument errors, exit codes, private-value diagnostics and absence of new runtime files |
 | [test_collection_config.py](../tests/test_collection_config.py) | Current generic model: root/month scopes, nearest policy, new profiles/volumes, unassigned collections, reference/tree/storage rejection, explicit deletion eligibility, no-write behavior and archive names with `_TARGET_`/ambiguous prefixes |
 | [test_config_identities.py](../tests/test_config_identities.py) | Display label edits/defaults , unknown IDs and explicit registration, retained offline identities, hardware changes and no-write checks |
+| [test_state_database.py](../tests/test_state_database.py) | Explicit SQLite lifecycle, read-only behavior, migration transactions, constraints, publication failures, concurrent creation/migration and recovery after process termination |
 
 `registry_values(root)` reads `.env.examples` and substitutes temporary paths and synthetic identifiers. `write_config` writes only temporary test configuration files. Parser and model tests cover required values, immutable/private DTOs and obsolete-key rejection. Flexibility tests cover source replacement, extra cards/volumes and archive continuation.
 
-Use synthetic data and temporary directories. Do not turn `.env`, connected phones, cards or archives into required test fixtures. Current tests do not demonstrate actual transfers, full archive hashes, physical identity verification, interruption recovery or database durability.
+Use synthetic data and temporary directories. Do not turn `.env`, connected phones, cards or archives into required test fixtures. State tests exercise SQLite transaction rollback and migration recovery on temporary files, including process termination. Actual transfers, full archive hashes, physical identity verification and hardware power-loss durability require later verification.
 
 ## Change navigation
 
@@ -51,6 +52,7 @@ Use synthetic data and temporary directories. Do not turn `.env`, connected phon
 | Cross-model invariant | `config/validation.py` | Generic collection tests and relationship-validation table |
 | Collection lookup/scope | `config/collections.py`, `config/models.py` | API tests and lookup-contract table |
 | Display labels/identity registration contract | `config/identities.py`, source DTOs and loaders | Identity tests, `docs/identities.md`, configuration reference and future state-layer integration |
+| SQLite lifecycle or migration | `state/database.py`, `state/migrations.py`, `state/revisions/` | State tests, `docs/state.md`, architecture and capability status. Append Alembic revisions while preserving applied revision files. |
 | Dependency | `pyproject.toml` | Explain purpose and obtain the user's decision before introducing a new library; update dependency documentation |
 | New subsystem | New focused package/module | Its own technical page linked from `docs/README.md`, tests and capability status |
 

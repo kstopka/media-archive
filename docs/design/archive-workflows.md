@@ -1,6 +1,6 @@
 # Archive workflows and state — planned design
 
-**Design only.** This document extracts general requirements and architecture proposals for future media operations. Current package/configuration behavior is documented in [architecture.md](../architecture.md) and [configuration.md](../configuration.md). SQLite, device adapters, transfers, audits and recovery described here are **not implemented**.
+**Design reference.** This document extracts requirements and architecture proposals for future media operations. Current package/configuration behavior is documented in [architecture.md](../architecture.md) and [configuration.md](../configuration.md). Task 1.3.1 implements the [SQLite lifecycle and migration foundation](../state.md). Persistent registration, media history, operation journals, device adapters, transfers, audits and workflow recovery remain planned.
 
 The [roadmap](../roadmap.md) defines delivery order. Requirements below describe intended behavior; proposed module/table names and protocols remain implementation designs, not existing APIs. Examples are neutral and do not describe a particular installation.
 

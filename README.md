@@ -11,7 +11,7 @@ The planned workflow keeps four operations separate:
 
 ## Status
 
-CLI help and read-only configuration validation are implemented, including collections, policies, source profiles and archive groups. SQLite and the four media operations above are not implemented yet.
+CLI help and read-only configuration validation are implemented, including collections, policies, source profiles and archive groups. The [SQLite foundation](docs/state.md) supplies a Python API for database lifecycle and schema migrations. Registration, media history and the four media operations remain planned.
 
 ## Quick start
 

@@ -1,8 +1,8 @@
 # Implementation roadmap
 
-This is the public implementation plan, using neutral examples. Checkboxes record delivered behavior; unchecked items are **planned and not available**. The current implementation reference starts at [docs/README.md](README.md).
+This public roadmap tracks project milestones. Checkboxes mark completed milestones. For currently available behavior, see the [technical documentation](README.md).
 
-Tasks 1.1, 1.2 and 1.2a are implemented; configuration code remains subject to contributor review. Database initialization, media operations and the configuration wizard are not implemented. This roadmap does not authorize operations on real media.
+The CLI skeleton, configuration loader and SQLite lifecycle API are available. Persistent registration, media history, media operations and the configuration wizard remain planned. See the [SQLite state reference](state.md).
 
 Design references: [archive workflows and state](design/archive-workflows.md) and [future configurator](design/configurator.md). Future module boundaries, database details and command syntax must be finalized during the relevant implementation task.
 
@@ -20,7 +20,7 @@ Design references: [archive workflows and state](design/archive-workflows.md) an
 - [x] **1.2 Configuration.** Literal `.env` loading with python-dotenv, immutable Pydantic models, named sources/storage and safe validation errors. The current loader supports only the registry schema described in [configuration.md](configuration.md#supported-configuration-format), with manual conversion required for obsolete settings. Loading never rewrites configuration; no TOML layer or environment override.
 - [x] **1.2a Collections, policies and backup profiles.** Extensible registries; source-to-collection references; explicit child policies; root scopes and date layouts; archive mappings. Structural validation prepares for later destination locking but does not persist it. See [configuration.md](configuration.md).
 - [ ] **1.3 SQLite and operation journal.** Schema/migrations, stable identities, initialization state, import/copy history, destination registration/locking, operation attempts, short transactions and recovery reconciliation. Persist identities independently from editable labels and enforce the [identity guard](identities.md) before execution: unknown IDs require explicit registration, never automatic history creation or initialization restart. Record verification time/run, scope, expected/read hashes and result separately from last-confirmed presence. A changed registered archive destination must fail before media writes; missing local files must not erase history.
-- [ ] **1.4 Operational CLI, reports and planning.** Operation/resume contracts, result and interruption codes, Polish text/JSON reports and retention of 20 completed runs. Dry-run must not migrate a database or record operational success.
+- [ ] **1.4 Operational CLI, reports and planning.** Explicit first setup and schema upgrades for [one database with a fixed filename](state.md#planned-first-setup-and-upgrades). Operation/resume contracts, result and interruption codes, Polish text/JSON reports and retention of 20 completed runs. Dry-run must not migrate a database or record operational success.
 - [ ] **1.5 State snapshots and restore.** Consistent database/configuration generations, validation and explicit restore with operations stopped. Corrupt snapshots must not replace valid state; restore must preserve history and require reconciliation with later disk changes.
 
 Task 1.3 follows the [four agreed requirements](design/archive-workflows.md#agreed-requirements-for-task-13). Acceptance includes the [registration requirements](identities.md#required-sqlite-integration--planned-for-task-13), historical source/target references and [journal completion constraints](design/archive-workflows.md#journal-and-crash-reconciliation). Use synthetic evidence to test state transitions and retries in this foundation. End-to-end recovery across actual file publication and database commit is accepted with the shared transfer mechanism in task 4.1.
@@ -81,6 +81,7 @@ Backup is ready for normal use only after the **entire stage**, including snapsh
 
 ## Deferred features
 
+- **Unusual database paths.** Handle or explicitly reject names near filesystem limits that leave insufficient room for SQLite's sidecar suffixes, and paths containing bytes outside UTF-8, before publishing a database.
 - Interactive configuration wizard: [design/configurator.md](design/configurator.md), after core operations work.
 - **Configurable sorting rules** (deferred): allow collections to select reusable, named sorting rules instead of requiring the current source-specific layouts. Keep `year_month` for phone collections and `camera_day` for camera collections as current defaults; adding the feature must not reorganize existing files automatically. Define rule inputs, destinations and migration behavior in a separate design before implementation.
 - Additional media-type filters; details require a separate design.

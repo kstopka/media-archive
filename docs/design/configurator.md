@@ -101,6 +101,8 @@ Photo All includes helper files, selection stages and final selections. A month 
 
 Show source identities, stable profile/collection names, source/local/archive paths, sorting rules, policies and deletion eligibility together. Saving settings alone does not import, move or back up files.
 
+First setup follows the [planned state lifecycle](../state.md#planned-first-setup-and-upgrades). After explicit confirmation, create `state.sqlite3` in the selected state directory and record the initial state. Later configuration reviews use the same database.
+
 A separate action starts the existing-data inventory. Required local collections, archives and relevant phone baselines can be scanned with resumable progress while disks are connected sequentially. Until all required comparison scope is complete, curated-baseline decisions remain unresolved. Quick path/size observations do not prove content equality; full local SHA-256 audits provide content evidence.
 
 The configuration-writing mechanism, edit/validation interface and handling of concurrent configuration edits require a separate implementation design. This document does not add an alternative configuration format or prescribe a new command syntax.
