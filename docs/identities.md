@@ -43,11 +43,11 @@ validate_registered_identities(candidate, registered)
 
 Never derive `registered` from the candidate configuration immediately before checking it; that would approve every new ID automatically. `configuration_identities()` describes candidate keys or accepted registrations for storage, not proof of prior registration. The guard compares key membership only: existing-ID reassignment, source-to-collection bindings, hardware trust, path registration and policy authorization require separate state/runtime checks.
 
-## Required SQLite integration — planned for task 1.3
+## Persistent registry and operation boundaries
 
-There is **no persistent identity registry yet**. The guard is implemented and tested with supplied in-memory registrations; `load_config()` and `--check-config` remain structural, read-only checks and do not invoke historical registration validation.
+The [persistent registry](registration.md) loads these key sets from SQLite and checks the candidate configuration with the same guard. It also checks persisted bindings and device evidence. `load_config()` and `--check-config` remain structural, read-only checks. Future operations will call the registry check at their execution boundary.
 
-Task 1.3 must:
+The identity and execution contracts are as follows.
 
 1. Persist stable identities and initialization/history associations at explicit registration. Store labels as editable descriptive fields, not keys.
 2. Load trusted registrations and run the guard before operations can write media or initialize a source.

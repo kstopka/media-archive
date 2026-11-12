@@ -1,6 +1,6 @@
 # Architecture
 
-Scope includes implemented tasks 1.1–1.2a and 1.3.1. The CLI reads and validates configuration. A separate [SQLite state API](state.md) provides explicit database lifecycle and migrations.
+The CLI reads and validates configuration. A separate [SQLite state API](state.md) provides explicit database lifecycle and migrations. The [registration API](registration.md) checks and persists approved configuration bindings.
 
 ## Runtime and dependencies
 
@@ -49,6 +49,7 @@ Paths below are relative to the repository root.
 | [config/errors.py](../src/media_archive/config/errors.py) | `ConfigError`, a `ValueError` subclass with safe CLI messages |
 | [state/database.py](../src/media_archive/state/database.py) | Explicit creation/opening, connection lifetime, short transactions and migration entry point |
 | [state/migrations.py](../src/media_archive/state/migrations.py) | Application identity, Alembic revision validation and migration entry point |
+| [state/registry.py](../src/media_archive/state/registry.py) | Trusted identity reads, configuration checks and explicit registration |
 | [state/revisions/](../src/media_archive/state/revisions/) | Packaged Alembic environment and schema revisions |
 | [state/errors.py](../src/media_archive/state/errors.py) | Safe `StateError` diagnostics |
 
@@ -97,7 +98,7 @@ The import source owns device connection details and an initialization-policy se
 
 Core models do not interpret names such as `main`, `secondary`, photos, documents or video as behavior. Display labels, registry IDs, profile aliases and device identifiers have distinct purposes; see [configuration.md](configuration.md).
 
-Source `LABEL` values are editable presentation text; `ALIAS` values remain persistent identity keys. The [identity guard](identities.md) compares a candidate configuration with supplied registered IDs. Task 1.3 must supply persisted registrations and enforce this guard at operation boundaries; loading configuration does not perform historical checks.
+Source `LABEL` values are editable presentation text. `ALIAS` values remain persistent identity keys. The [identity guard](identities.md) compares a candidate configuration with registered IDs supplied by the registry. Future operations invoke the persistent check at their execution boundary.
 
 ## Side effects and boundaries
 
@@ -107,4 +108,4 @@ Pydantic field validation establishes individual value types. `validate_relation
 
 Collection helper methods resolve configuration scopes and policies only. They do not generate a transfer plan, find actual months, check connected targets, deduplicate files by hash, confirm deletions or establish verified copies.
 
-`Configuration.archive_mapping()` prepares a normalized relative mapping string. No historical comparison or lock is implemented. Persisting registrations and blocking destination changes belong to task 1.3.2, building on the [state foundation](state.md). A mounted path or configured UUID is not proof of physical device identity; runtime verification remains future work.
+`Configuration.archive_mapping()` prepares a normalized relative mapping string. The state registry compares effective destinations with persisted reservations. A configured UUID supplies registration evidence. Physical device and mount verification remain future work.

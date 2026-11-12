@@ -1,4 +1,4 @@
-"""Pure identity checks; registration storage belongs to the future state layer."""
+"""Pure identity checks shared with the persistent state registry."""
 
 from .base import ConfigModel
 from .errors import ConfigError

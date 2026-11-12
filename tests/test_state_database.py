@@ -42,7 +42,7 @@ class StateDatabaseTests(unittest.TestCase):
         self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
         self.assertEqual(list(self.root.iterdir()), [self.path])
         with open_database(self.path) as connection:
-            self.assertEqual(schema_version(connection), "0001")
+            self.assertEqual(schema_version(connection), "0002")
             self.assertEqual(connection.exec_driver_sql("PRAGMA application_id").fetchone()[0], APPLICATION_ID)
             self.assertEqual(connection.exec_driver_sql("PRAGMA foreign_keys").fetchone()[0], 1)
             self.assertEqual(connection.exec_driver_sql("PRAGMA synchronous").fetchone()[0], 2)
@@ -173,7 +173,7 @@ os._exit(23)
             results = list(executor.map(lambda _: create(), range(2)))
         self.assertEqual(sorted(results), [False, True])
         with open_database(self.path) as connection:
-            self.assertEqual(schema_version(connection), "0001")
+            self.assertEqual(schema_version(connection), "0002")
         self.assertEqual(list(self.root.iterdir()), [self.path])
 
     def test_invalid_paths_and_nonregular_files_are_rejected(self) -> None:
@@ -325,7 +325,7 @@ os._exit(23)
                 create_database(self.path)
         self.assertNotIn("PRIVATE_DIRECTORY", str(caught.exception))
         with open_database(self.path) as connection:
-            self.assertEqual(schema_version(connection), "0001")
+            self.assertEqual(schema_version(connection), "0002")
         self.assertEqual(list(self.root.iterdir()), [self.path])
 
     def test_help_and_configuration_check_never_connect_to_database(self) -> None:
@@ -394,7 +394,7 @@ os._exit(23)
         if os.access(self.path, os.W_OK):
             self.skipTest("Current user can write this file despite mode 0400")
         with open_database(self.path) as reader:
-            self.assertEqual(schema_version(reader), "0001")
+            self.assertEqual(schema_version(reader), "0002")
         with self.assertRaises(StateError):
             with open_database(self.path, writable=True):
                 self.fail("Read-only file exposed as writable")
@@ -403,7 +403,7 @@ os._exit(23)
         create_database(self.path)
         before = self.path.read_bytes()
         with open_database(self.path, writable=True) as connection:
-            self.assertEqual(schema_version(connection), "0001")
+            self.assertEqual(schema_version(connection), "0002")
         self.assertEqual(self.path.read_bytes(), before)
         self.assertEqual(list(self.root.iterdir()), [self.path])
 
@@ -413,7 +413,7 @@ os._exit(23)
             self.skipTest("Current user can write this directory despite mode 0500")
         self.assertTrue(os.access(self.path, os.W_OK))
         with open_database(self.path) as reader:
-            self.assertEqual(schema_version(reader), "0001")
+            self.assertEqual(schema_version(reader), "0002")
         with self.assertRaises(StateError):
             with open_database(self.path, writable=True):
                 self.fail("Connection exposed without permission to create a journal")
@@ -426,9 +426,11 @@ class StateMigrationTests(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name)
         self.path = self.root / "state.sqlite3"
-        self.packaged_revisions = migrations._SCRIPT_LOCATION
         self.revisions = self.root / "revisions"
-        shutil.copytree(self.packaged_revisions, self.revisions, ignore=shutil.ignore_patterns("__pycache__"))
+        versions = self.revisions / "versions"
+        versions.mkdir(parents=True)
+        shutil.copy(migrations._SCRIPT_LOCATION / "env.py", self.revisions)
+        shutil.copy(migrations._SCRIPT_LOCATION / "versions" / "r0001_foundation.py", versions)
         self.enterContext(patch.object(migrations, "_SCRIPT_LOCATION", self.revisions))
 
     def add_revision(self, version: str, parent: str, *statements: str) -> None:
@@ -638,10 +640,10 @@ database.migrate_database(sys.argv[1])
             with open_database(self.path):
                 self.fail("Read-only access unexpectedly recovered the journal")
         self.assertTrue(journal.exists())
-        with patch.object(migrations, "_SCRIPT_LOCATION", self.packaged_revisions):
-            with open_database(self.path, writable=True) as connection:
-                self.assertEqual(schema_version(connection), "0001")
-                self.assertEqual(connection.exec_driver_sql("SELECT value FROM original").all(), [("preserved",)])
+        (self.revisions / "versions" / "r0002.py").unlink()
+        with open_database(self.path, writable=True) as connection:
+            self.assertEqual(schema_version(connection), "0001")
+            self.assertEqual(connection.exec_driver_sql("SELECT value FROM original").all(), [("preserved",)])
         self.assertEqual(self.path.read_bytes(), before)
         self.assertFalse(journal.exists())
 

@@ -1,6 +1,6 @@
 # SQLite state foundation
 
-Implemented task **1.3.1** provides explicit SQLite database creation, opening, schema validation, transactions and migrations. SQLAlchemy Core manages connections and transactions. Alembic manages schema revisions. Registration, media history, operation journals and operation locks are planned in tasks 1.3.2–1.3.4. Operational CLI commands belong to task 1.4.
+The SQLite state API provides explicit database creation, opening, schema validation, transactions and migrations. SQLAlchemy Core manages connections and transactions. Alembic manages schema revisions. The [persistent registry](registration.md) records identities and approved configuration bindings. Media history, operation journals and operation locks remain planned. Operational CLI commands belong to task 1.4.
 
 ## Entry points and ownership
 
@@ -44,7 +44,7 @@ Creation is separate from migration. Opening a missing database fails. A known o
 
 [migrations.py](../src/media_archive/state/migrations.py) runs the packaged [Alembic revisions](../src/media_archive/state/revisions/versions/) on the application's existing connection. Add schema changes as a new Alembic revision whose `down_revision` points to the current head. Preserve applied revision files and keep one head.
 
-The current schema contains `main.alembic_version`, with one row for the applied revision `0001`. Both Alembic and the state API read the revision from `main`, so a temporary table with the same name cannot change which revision gets recorded or validated. SQLite header `application_id` is `0x4D415243` (`MARC`).
+The current revision is `0002`, which adds persistent registry tables to the `0001` baseline. `main.alembic_version` stores one applied revision. Both Alembic and the state API read the revision from `main`, so a temporary table with the same name cannot change which revision gets recorded or validated. SQLite header `application_id` is `0x4D415243` (`MARC`).
 
 The Alembic environment runs in a caller-owned transaction with transactional DDL. Use Alembic operations or SQL on `op.get_bind()`. The SQLite authorizer blocks transaction-control statements, database attachment and changes to connection settings during revisions. This keeps schema changes and Alembic's revision update in the same transaction. A failed revision rolls back the entire pending batch. [Alembic's shared connection recipe](https://alembic.sqlalchemy.org/en/latest/cookbook.html#sharing-a-connection-across-one-or-more-programmatic-migration-commands)
 

@@ -37,6 +37,7 @@ The SQLite foundation verification passed **122 tests on Python 3.14.4 with SQLi
 | [test_collection_config.py](../tests/test_collection_config.py) | Current generic model: root/month scopes, nearest policy, new profiles/volumes, unassigned collections, reference/tree/storage rejection, explicit deletion eligibility, no-write behavior and archive names with `_TARGET_`/ambiguous prefixes |
 | [test_config_identities.py](../tests/test_config_identities.py) | Display label edits/defaults , unknown IDs and explicit registration, retained offline identities, hardware changes and no-write checks |
 | [test_state_database.py](../tests/test_state_database.py) | Explicit SQLite lifecycle, read-only behavior, migration transactions, constraints, publication failures, concurrent creation/migration and recovery after process termination |
+| [test_state_registry.py](../tests/test_state_registry.py) | Persistent IDs and bindings, retained archive reservations, explicit hardware changes, concurrent approvals and registration rollback |
 
 `registry_values(root)` reads `.env.examples` and substitutes temporary paths and synthetic identifiers. `write_config` writes only temporary test configuration files. Parser and model tests cover required values, immutable/private DTOs and obsolete-key rejection. Flexibility tests cover source replacement, extra cards/volumes and archive continuation.
 
@@ -51,7 +52,7 @@ Use synthetic data and temporary directories. Do not turn `.env`, connected phon
 | New reusable field constraint | `config/field_types.py` | Tests of valid/invalid values and field-validation reference |
 | Cross-model invariant | `config/validation.py` | Generic collection tests and relationship-validation table |
 | Collection lookup/scope | `config/collections.py`, `config/models.py` | API tests and lookup-contract table |
-| Display labels/identity registration contract | `config/identities.py`, source DTOs and loaders | Identity tests, `docs/identities.md`, configuration reference and future state-layer integration |
+| Display labels and identity registration | `config/identities.py`, source DTOs and `state/registry.py` | Identity and registry tests, `docs/identities.md`, `docs/registration.md` and configuration reference |
 | SQLite lifecycle or migration | `state/database.py`, `state/migrations.py`, `state/revisions/` | State tests, `docs/state.md`, architecture and capability status. Append Alembic revisions while preserving applied revision files. |
 | Dependency | `pyproject.toml` | Explain purpose and obtain the user's decision before introducing a new library; update dependency documentation |
 | New subsystem | New focused package/module | Its own technical page linked from `docs/README.md`, tests and capability status |

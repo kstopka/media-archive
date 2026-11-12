@@ -122,7 +122,7 @@ class Configuration(ConfigModel, CollectionView):
         raise KeyError(alias)
 
     def archive_mapping(self, collection_id: str, group_id: str) -> str:
-        """Normalized relative mapping for future SQLite registration/locking.
+        """Compose the group's root and the collection's relative destination.
 
         Reading configuration does not persist or enforce historical mappings.
         A mount change for the same disk leaves this mapping unchanged.

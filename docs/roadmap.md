@@ -2,7 +2,7 @@
 
 This public roadmap tracks project milestones. Checkboxes mark completed milestones. For currently available behavior, see the [technical documentation](README.md).
 
-The CLI skeleton, configuration loader and SQLite lifecycle API are available. Persistent registration, media history, media operations and the configuration wizard remain planned. See the [SQLite state reference](state.md).
+The CLI skeleton, configuration loader, SQLite lifecycle and persistent registration APIs are available. Media history, media operations and the configuration wizard remain planned. See the [SQLite state reference](state.md).
 
 Design references: [archive workflows and state](design/archive-workflows.md) and [future configurator](design/configurator.md). Future module boundaries, database details and command syntax must be finalized during the relevant implementation task.
 
@@ -23,7 +23,7 @@ Design references: [archive workflows and state](design/archive-workflows.md) an
 - [ ] **1.4 Operational CLI, reports and planning.** Explicit first setup and schema upgrades for [one database with a fixed filename](state.md#planned-first-setup-and-upgrades). Operation/resume contracts, result and interruption codes, Polish text/JSON reports and retention of 20 completed runs. Dry-run must not migrate a database or record operational success.
 - [ ] **1.5 State snapshots and restore.** Consistent database/configuration generations, validation and explicit restore with operations stopped. Corrupt snapshots must not replace valid state; restore must preserve history and require reconciliation with later disk changes.
 
-Task 1.3 follows the [four agreed requirements](design/archive-workflows.md#agreed-requirements-for-task-13). Acceptance includes the [registration requirements](identities.md#required-sqlite-integration--planned-for-task-13), historical source/target references and [journal completion constraints](design/archive-workflows.md#journal-and-crash-reconciliation). Use synthetic evidence to test state transitions and retries in this foundation. End-to-end recovery across actual file publication and database commit is accepted with the shared transfer mechanism in task 4.1.
+Task 1.3 follows the [four agreed requirements](design/archive-workflows.md#agreed-requirements-for-task-13). Acceptance includes [registration](registration.md), historical source/target references and [journal completion constraints](design/archive-workflows.md#journal-and-crash-reconciliation). Use synthetic evidence to test state transitions and retries in this foundation. End-to-end recovery across actual file publication and database commit is accepted with the shared transfer mechanism in task 4.1.
 
 Before production registration, confirm the intended archive layout. Local readiness checks remain separate from the generic schema. Proceed to task 1.3 only after the requested review and explicit continuation instruction, respecting repository-specific contributor instructions.
 

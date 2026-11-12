@@ -78,7 +78,7 @@ Documents → selected archive disks → Data/Documents
 
 Policies already belong to collections; they are not selected separately for each disk. Child rules are included through their root and must not appear as duplicate transfer scopes.
 
-First explicit database registration fixes the v1 archive destination mapping. A changed mount of the same disk or an additional disk with the same archive layout is allowed; an archive-directory migration is a separate deferred feature. No registration occurs merely by opening a configuration file or running a configuration check.
+The [registry API](../registration.md) reserves destinations at the first explicit archive assignment, including child collections. The reservation survives removal from the current configuration. A changed mount of the same disk or an additional disk with the same archive layout is allowed. Archive-directory migration is deferred. The setup interface will invoke registration after the operator approves the candidate.
 
 Retain old full disks as `read_only` and add new `active` targets instead of overwriting identities. Read-only targets cannot receive media changes, deletions or state snapshots. New entries do not migrate files or establish two verified copies by themselves.
 

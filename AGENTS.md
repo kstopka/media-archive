@@ -9,7 +9,7 @@ Start with [docs/README.md](docs/README.md), then the relevant feature reference
 - `docs/`: public technical documentation, organized by feature as the application grows.
 - `archive_docs/`: ignored local plans, when present; distinguish planned behavior from implemented features.
 
-CLI help and configuration validation work. The [SQLite foundation](docs/state.md) provides an explicit Python API for database lifecycle and migrations. Persistent registration, media history and media operations remain unimplemented.
+CLI help and configuration validation work. The [SQLite foundation](docs/state.md) and [registry](docs/registration.md) provide explicit Python APIs for database lifecycle, migrations and registration. Media history and media operations remain unimplemented.
 
 ## Build, Test, and Development Commands
 

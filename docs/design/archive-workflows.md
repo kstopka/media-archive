@@ -1,6 +1,6 @@
 # Archive workflows and state — planned design
 
-**Design reference.** This document extracts requirements and architecture proposals for future media operations. Current package/configuration behavior is documented in [architecture.md](../architecture.md) and [configuration.md](../configuration.md). Task 1.3.1 implements the [SQLite lifecycle and migration foundation](../state.md). Persistent registration, media history, operation journals, device adapters, transfers, audits and workflow recovery remain planned.
+**Design reference.** This document records requirements for future media operations. The current [configuration](../configuration.md), [SQLite lifecycle](../state.md) and [persistent registration](../registration.md) have separate implementation references. Media history, operation journals, device adapters, transfers, audits and workflow recovery remain planned.
 
 The [roadmap](../roadmap.md) defines delivery order. Requirements below describe intended behavior; proposed module/table names and protocols remain implementation designs, not existing APIs. Examples are neutral and do not describe a particular installation.
 
@@ -143,15 +143,17 @@ Use foreign keys, uniqueness constraints and indexes to prevent duplicate histor
 
 Store shared profile, collection, device and volume definitions once and reference their IDs from history. Each import must retain its source profile, actual source device/volume episode where applicable, observed source path, content and destination occurrence through these references. Each archive copy must retain its actual volume episode and relative path. Preserve historical associations when current paths or devices change. Required target assignments also exist for copies still pending. Database-size estimates belong to the finalized schema and representative synthetic data.
 
-The configuration layer implements a [pure identity guard](../identities.md). The state layer must load registered keys and enforce it before execution: unknown IDs require explicit registration, never automatic history creation or initialization restart. Labels remain freely editable. Removed entries retain history; intentional ID renames require a separate explicit design rather than inference from paths, labels or hardware.
+The state registry loads registered keys and checks them with the [identity guard](../identities.md). Future operations must call that check before execution. Unknown IDs require explicit registration. Labels remain editable and removed entries retain their records. Intentional ID renames require a separate design.
 
 ### Destination registration
 
-At first explicit registration, persist the collection ID, archive group ID and normalized archive root plus collection-relative destination, including effective mappings for child collections. Subsequent operations using a changed v1 mapping or archive-group association must fail before media writes. Reading `.env`, `--check-config` and dry-run never register or lock destinations.
+At first explicit assignment, persist the collection ID, archive group ID and normalized collection-relative destination, including effective mappings for child collections. Register the group root separately because it defines the audit scope. Changing that root can narrow an audit even when the final backup directory stays the same. Subsequent operations using a changed registered mapping or archive-group association must fail before media writes. Reading `.env`, `--check-config` and dry-run never register or lock destinations.
 
 Changing the local root with the same collection ID does not reset import history or move existing files. Updating the mount of the same disk or adding a disk with the same archive layout does not change the archive mapping. Historical copy evidence remains tied to its actual disk/path/content.
 
 A collection may be registered while it has no backup assignment. Register its archive mapping explicitly when an archive group is first assigned, including inherited child mappings. Removing a current assignment must retain existing mapping locks and history so that removing and re-adding configuration cannot bypass them.
+
+Retained mappings also reserve paths against a different collection ID in the same group. Reject identical or overlapping destinations for unrelated collections. A registered parent and its children can reserve nested destinations within the same tree. Moving an assigned collection to a different backup profile or a registered card to a different camera profile is deferred beyond the MVP.
 
 A separate post-v1 feature may offer verified destination migration or a new destination history with an explicit old-content cutoff. Preserve previous files and history; do not implement either mode by resetting global import memory or editing `.env` alone.
 
@@ -173,9 +175,9 @@ Use short database transactions and coordinated writes; do not keep a transactio
 
 ### Agreed requirements for task 1.3
 
-These four requirements define the accepted state-layer behavior for implementation and review. Task 1.3 remains planned.
+These four requirements define the accepted state-layer behavior for implementation and review.
 
-1. **Explicit device registration.** Persist stable device IDs and associations with source profiles and filesystem episodes. A replacement phone or changed UUID requires explicit registration of the association while preserving previous history. Keep actual source and destination identities and paths accessible from each operation's history through stable references.
+1. **Explicit device registration.** Persist stable device IDs and associations with source profiles and filesystem episodes. After formatting, append a filesystem episode to the same device. When replacing hardware, append a new device under the same role or source profile. Both changes require explicit confirmation and retain the earlier records. Keep actual source and destination identities and paths accessible from each operation's history through stable references.
 2. **Deferred archive assignment and retained destination locks.** Allow a collection to be registered before its archive targets are selected. At its first explicit archive assignment, register the group and relative destination, including effective child mappings. Retain those locks after removing configuration entries. For example, removing and re-adding a collection cannot silently change its destination from `Archive/Films` to `Archive/OtherFilms`. Apply the same historical mapping checks on re-addition.
 3. **Safe schema migrations and operation concurrency.** A migration updates database structure when application versions add or change tables. Apply each migration atomically so failure preserves the preceding valid schema and history. Protect conflicting file operations for their full lifetime, including transfer time between short database transactions. For example, a second BACKUP targeting the same destination must not race an unfinished BACKUP. Independent operations may proceed concurrently when their scopes permit it. Tests must cover migration failure, conflicting processes, interruption and safe recovery.
 4. **Durable history and explicit initialization progress.** Report-file rotation preserves database history, verification evidence and required run references. For example, after a backup of 100 photos, removing its text/JSON reports outside the retention limit preserves the recorded copy outcomes and verification evidence. Registering a source leaves its initialization pending. Later initialization workflows record progress and mark completion only after the required comparison and processing have finished. Interrupted initialization retains progress for resumption. Manual selection or local removal preserves prior import history.
