@@ -108,6 +108,7 @@ def _engine(path: Path, *, writable: bool, migrating: bool = False, initializing
             if not writable:
                 cursor.execute("PRAGMA query_only = ON")
         record.info["state_writable"] = writable
+        record.info["state_path"] = path
 
     @event.listens_for(engine, "begin")
     def begin(connection: Connection) -> None:

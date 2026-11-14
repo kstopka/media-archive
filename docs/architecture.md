@@ -1,6 +1,6 @@
 # Architecture
 
-The CLI reads and validates configuration. A separate [SQLite state API](state.md) provides explicit database lifecycle and migrations. The [registration API](registration.md) checks and persists approved configuration bindings. The [history API](history.md) records media evidence, archive requirements and initialization checkpoints.
+The CLI reads and validates configuration. A separate [SQLite state API](state.md) provides explicit database lifecycle and migrations. The [registration API](registration.md) checks and persists approved configuration bindings. The [history API](history.md) records media evidence, archive requirements and initialization checkpoints. The [journal API](journal.md) records operation attempts and coordinates resource locks.
 
 ## Runtime and dependencies
 

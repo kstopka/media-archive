@@ -1,6 +1,6 @@
 # Archive workflows and state — planned design
 
-**Design reference.** This document records requirements for future media operations. The current [configuration](../configuration.md), [SQLite lifecycle](../state.md) and [persistent registration](../registration.md) have separate implementation references. The [history API](../history.md) stores media evidence and initialization progress. Operation journals, device adapters, transfers, audits and workflow recovery remain planned.
+**Design reference.** This document records requirements for future media operations. The current [configuration](../configuration.md), [SQLite lifecycle](../state.md) and [persistent registration](../registration.md) have separate implementation references. The [history API](../history.md) stores media evidence and initialization progress. The [journal API](../journal.md) records attempts and coordinates locks. Device adapters, transfers, audits and workflow recovery remain planned.
 
 The [roadmap](../roadmap.md) defines delivery order. Requirements below describe intended behavior; proposed module/table names and protocols remain implementation designs, not existing APIs. Examples are neutral and do not describe a particular installation.
 
@@ -162,7 +162,7 @@ A separate post-v1 feature may offer verified destination migration or a new des
 Proposed attempt states:
 
 ```text
-planned → transferring → transferred → verifying → verified → committed
+planned → transferring → transferred → verifying → verified → published → committed
 ```
 
 Additional states may include `interrupted`, `failed`, `conflict` and `needs_review`. A transferred or merely hashed temporary file is not yet a published completed copy.

@@ -54,7 +54,7 @@ class StateHistoryTests(unittest.TestCase):
             connection, occurrence_id, run_id, verified_at=NOW, scope="full", read_sha256=HASH, bytes_read=42,
         )
 
-    def test_explicit_0003_migration_preserves_registration(self) -> None:
+    def test_current_migration_preserves_registration(self) -> None:
         old = self.root / "previous-revisions"
         versions = old / "versions"
         versions.mkdir(parents=True)
@@ -68,7 +68,7 @@ class StateHistoryTests(unittest.TestCase):
             register_configuration(config)
         keys = load_registered_identities(self.path)
         devices = load_registered_devices(self.path)
-        self.assertEqual(migrate_database(self.path), "0003")
+        self.assertEqual(migrate_database(self.path), "0004")
         self.assertEqual(load_registered_identities(self.path), keys)
         self.assertEqual(load_registered_devices(self.path), devices)
         validate_registered_configuration(config)

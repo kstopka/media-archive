@@ -6,7 +6,7 @@ Revision `0003` adds persistent history and initialization state. Use `media_arc
 
 | API | Contract |
 | --- | --- |
-| `create_run(connection)` | Allocate a durable run ID for evidence. The operation journal will add execution state separately. |
+| `create_run(connection)` | Allocate a durable run ID for evidence. The [operation journal](journal.md) uses this ID for execution state. |
 | `record_content(connection, sha256, size)` | Return the shared ID of a full SHA-256 and byte count. |
 | `record_occurrence(connection, kind, path, ...)` | Create a distinct occurrence and optionally link its known content ID. Record a new occurrence when a different file uses the same path. |
 | `record_observation(connection, occurrence_id, run_id, ...)` | Record presence or absence at an explicit time. A presence observation may include byte size and modification time. |

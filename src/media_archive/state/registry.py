@@ -315,8 +315,12 @@ def validate_registered_configuration(config: Configuration) -> None:
     validate_relationships(config)
     with open_database(config.app.database_file) as connection:
         _require_registry(connection)
-        validate_registered_identities(config, _registered_identities(connection))
-        _check_configuration(connection, config, register=False, changes={})
+        _validate_registered_configuration(connection, config)
+
+
+def _validate_registered_configuration(connection: Connection, config: Configuration) -> None:
+    validate_registered_identities(config, _registered_identities(connection))
+    _check_configuration(connection, config, register=False, changes={})
 
 
 def register_configuration(config: Configuration, *, device_changes: Iterable[DeviceChange] = ()) -> None:
