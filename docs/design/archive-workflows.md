@@ -1,6 +1,6 @@
 # Archive workflows and state — planned design
 
-**Design reference.** This document records requirements for future media operations. The current [configuration](../configuration.md), [SQLite lifecycle](../state.md) and [persistent registration](../registration.md) have separate implementation references. Media history, operation journals, device adapters, transfers, audits and workflow recovery remain planned.
+**Design reference.** This document records requirements for future media operations. The current [configuration](../configuration.md), [SQLite lifecycle](../state.md) and [persistent registration](../registration.md) have separate implementation references. The [history API](../history.md) stores media evidence and initialization progress. Operation journals, device adapters, transfers, audits and workflow recovery remain planned.
 
 The [roadmap](../roadmap.md) defines delivery order. Requirements below describe intended behavior; proposed module/table names and protocols remain implementation designs, not existing APIs. Examples are neutral and do not describe a particular installation.
 
@@ -93,7 +93,7 @@ Read-only targets remain available to inventory/audit but receive no media write
 
 ### Successive archive pairs
 
-Persist the required target pair for each material occurrence and its required archive path. When an existing pair becomes full, the operator explicitly switches the pair used for newly assigned material. Previously assigned material retains its original pair, including pending second copies. Adding or selecting a new pair alone must preserve these assignments. Readiness checks and missing-copy planning use the material's recorded pair. For example, earlier material assigned to A/B stays on A/B after new material starts using C/D. Transfer to a different pair requires a separate explicit migration design.
+Before the first backup of an occurrence, select two registered target devices and persist the pair and required archive path. One device can be disconnected while copying to the other. When an existing pair becomes full, the operator explicitly switches the pair used for newly assigned material. Previously assigned material retains its original pair, including pending second copies. Adding or selecting a new pair alone must preserve these assignments. Readiness checks and missing-copy planning use the material's recorded pair. For example, earlier material assigned to A/B stays on A/B after new material starts using C/D. Transfer to a different pair requires a separate explicit migration design.
 
 ### Fresh proof before manual local-space release
 

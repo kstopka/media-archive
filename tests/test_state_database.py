@@ -42,7 +42,7 @@ class StateDatabaseTests(unittest.TestCase):
         self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
         self.assertEqual(list(self.root.iterdir()), [self.path])
         with open_database(self.path) as connection:
-            self.assertEqual(schema_version(connection), "0002")
+            self.assertEqual(schema_version(connection), "0003")
             self.assertEqual(connection.exec_driver_sql("PRAGMA application_id").fetchone()[0], APPLICATION_ID)
             self.assertEqual(connection.exec_driver_sql("PRAGMA foreign_keys").fetchone()[0], 1)
             self.assertEqual(connection.exec_driver_sql("PRAGMA synchronous").fetchone()[0], 2)
@@ -57,6 +57,17 @@ class StateDatabaseTests(unittest.TestCase):
         with self.assertRaises(StateError):
             migrate_database(self.path)
         self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_database_apis_reject_non_utf8_paths(self) -> None:
+        path = self.root / "private-name-\udcff.sqlite3"
+        for operation in (create_database, migrate_database):
+            with self.assertRaisesRegex(StateError, "UTF-8") as failure:
+                operation(path)
+            self.assertNotIn("private-name", str(failure.exception))
+            self.assertIsNone(failure.exception.__context__)
+        with self.assertRaisesRegex(StateError, "UTF-8"), open_database(path):
+            self.fail("A database with a non-UTF-8 path was opened")
+        self.assertFalse(path.exists())
 
     def test_creation_does_not_create_parent_directories(self) -> None:
         with self.assertRaises(StateError):
@@ -173,7 +184,7 @@ os._exit(23)
             results = list(executor.map(lambda _: create(), range(2)))
         self.assertEqual(sorted(results), [False, True])
         with open_database(self.path) as connection:
-            self.assertEqual(schema_version(connection), "0002")
+            self.assertEqual(schema_version(connection), "0003")
         self.assertEqual(list(self.root.iterdir()), [self.path])
 
     def test_invalid_paths_and_nonregular_files_are_rejected(self) -> None:
@@ -325,7 +336,7 @@ os._exit(23)
                 create_database(self.path)
         self.assertNotIn("PRIVATE_DIRECTORY", str(caught.exception))
         with open_database(self.path) as connection:
-            self.assertEqual(schema_version(connection), "0002")
+            self.assertEqual(schema_version(connection), "0003")
         self.assertEqual(list(self.root.iterdir()), [self.path])
 
     def test_help_and_configuration_check_never_connect_to_database(self) -> None:
@@ -394,7 +405,7 @@ os._exit(23)
         if os.access(self.path, os.W_OK):
             self.skipTest("Current user can write this file despite mode 0400")
         with open_database(self.path) as reader:
-            self.assertEqual(schema_version(reader), "0002")
+            self.assertEqual(schema_version(reader), "0003")
         with self.assertRaises(StateError):
             with open_database(self.path, writable=True):
                 self.fail("Read-only file exposed as writable")
@@ -403,7 +414,7 @@ os._exit(23)
         create_database(self.path)
         before = self.path.read_bytes()
         with open_database(self.path, writable=True) as connection:
-            self.assertEqual(schema_version(connection), "0002")
+            self.assertEqual(schema_version(connection), "0003")
         self.assertEqual(self.path.read_bytes(), before)
         self.assertEqual(list(self.root.iterdir()), [self.path])
 
@@ -413,7 +424,7 @@ os._exit(23)
             self.skipTest("Current user can write this directory despite mode 0500")
         self.assertTrue(os.access(self.path, os.W_OK))
         with open_database(self.path) as reader:
-            self.assertEqual(schema_version(reader), "0002")
+            self.assertEqual(schema_version(reader), "0003")
         with self.assertRaises(StateError):
             with open_database(self.path, writable=True):
                 self.fail("Connection exposed without permission to create a journal")

@@ -11,7 +11,7 @@ The planned workflow keeps four operations separate:
 
 ## Status
 
-CLI help and read-only configuration validation are available. Python APIs provide [SQLite lifecycle and migrations](docs/state.md) and [explicit configuration registration](docs/registration.md). Media history and the four media operations remain planned.
+CLI help and read-only configuration validation are available. Python APIs provide [SQLite lifecycle and migrations](docs/state.md), [explicit configuration registration](docs/registration.md), and [media history and initialization](docs/history.md). The four media operations remain planned.
 
 ## Quick start
 

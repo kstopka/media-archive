@@ -14,6 +14,8 @@ from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.pool import ConnectionPoolEntry, NullPool
 
+from media_archive._encoding import require_utf8
+
 from .errors import StateError
 from .migrations import APPLICATION_ID, _head_revision, _upgrade, schema_version
 
@@ -26,6 +28,7 @@ _JOURNAL_HEADER = struct.Struct(">8s5I")
 
 def _database_path(path: str | Path) -> Path:
     candidate = Path(path)
+    require_utf8(str(candidate), StateError)
     if not candidate.is_absolute() or ".." in candidate.parts or "\x00" in str(candidate):
         raise StateError("Baza stanu wymaga bezwzględnej ścieżki bez przejść do rodzica.")
     if candidate.name.endswith(_SIDECAR_SUFFIXES):
@@ -171,8 +174,13 @@ def transaction(connection: Connection) -> Generator[Connection, None, None]:
             raise StateError("Połączenie bazy stanu ma nieobsługiwany tryb autocommit.")
         try:
             with connection.begin():
-                yield connection
-                _check_active_transaction(connection)
+                info = connection.info
+                info["state_write_transaction"] = True
+                try:
+                    yield connection
+                    _check_active_transaction(connection)
+                finally:
+                    info.pop("state_write_transaction", None)
         except SQLAlchemyError:
             # A failed SQLite COMMIT can leave the underlying transaction open
             # after SQLAlchemy has deactivated its transaction object.

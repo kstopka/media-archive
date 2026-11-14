@@ -1,6 +1,6 @@
 # SQLite state foundation
 
-The SQLite state API provides explicit database creation, opening, schema validation, transactions and migrations. SQLAlchemy Core manages connections and transactions. Alembic manages schema revisions. The [persistent registry](registration.md) records identities and approved configuration bindings. Media history, operation journals and operation locks remain planned. Operational CLI commands belong to task 1.4.
+The SQLite state API provides explicit database creation, opening, schema validation, transactions and migrations. SQLAlchemy Core manages connections and transactions. Alembic manages schema revisions. The [persistent registry](registration.md) records identities and approved configuration bindings. The [history API](history.md) records media evidence and initialization progress. Operation journals and operation locks remain planned. Operational CLI commands belong to task 1.4.
 
 ## Entry points and ownership
 
@@ -15,7 +15,7 @@ The SQLite state API provides explicit database creation, opening, schema valida
 | `transaction(connection)` | Context manager for a short write transaction on a writable connection supplied by the state API. Commit on normal exit, roll back on exceptions or interruption, including a failed commit. Reject nested transactions and driver-level autocommit. |
 | `StateError` | Application-level failure with a Polish diagnostic that excludes database paths, SQL text and values. |
 
-Paths accept `str` or `Path` and must be absolute, contain no `..` components or NUL bytes, and identify regular files when opening. Leaf symlinks are rejected. The suffixes `-journal`, `-wal` and `-shm` are reserved for SQLite and cannot be used as database names. Use an ordinary UTF-8 filename with room for SQLite's journal suffix. Explicit handling of extreme filename lengths and non-UTF-8 paths is [deferred](roadmap.md#deferred-features). Parent directories are trusted application state directories. Filesystem identity, mount and media-path checks belong to the device subsystem.
+Paths accept `str` or `Path` and must be absolute, contain no `..` components or NUL bytes, and identify regular files when opening. Leaf symlinks are rejected. The suffixes `-journal`, `-wal` and `-shm` are reserved for SQLite and cannot be used as database names. The full database path must be representable in UTF-8. Invalid encoding raises `StateError` before database access. Leave room for SQLite's journal suffix. Explicit handling of extreme filename lengths is [deferred](roadmap.md#deferred-features). Parent directories are trusted application state directories. Filesystem identity, mount and media-path checks belong to the device subsystem.
 
 Example for an explicitly selected temporary state directory whose parent already exists
 
@@ -44,7 +44,7 @@ Creation is separate from migration. Opening a missing database fails. A known o
 
 [migrations.py](../src/media_archive/state/migrations.py) runs the packaged [Alembic revisions](../src/media_archive/state/revisions/versions/) on the application's existing connection. Add schema changes as a new Alembic revision whose `down_revision` points to the current head. Preserve applied revision files and keep one head.
 
-The current revision is `0002`, which adds persistent registry tables to the `0001` baseline. `main.alembic_version` stores one applied revision. Both Alembic and the state API read the revision from `main`, so a temporary table with the same name cannot change which revision gets recorded or validated. SQLite header `application_id` is `0x4D415243` (`MARC`).
+The current revision is `0003`, which adds history and initialization to the registry introduced in `0002`. `main.alembic_version` stores one applied revision. Both Alembic and the state API read the revision from `main`, so a temporary table with the same name cannot change which revision gets recorded or validated. SQLite header `application_id` is `0x4D415243` (`MARC`).
 
 The Alembic environment runs in a caller-owned transaction with transactional DDL. Use Alembic operations or SQL on `op.get_bind()`. The SQLite authorizer blocks transaction-control statements, database attachment and changes to connection settings during revisions. This keeps schema changes and Alembic's revision update in the same transaction. A failed revision rolls back the entire pending batch. [Alembic's shared connection recipe](https://alembic.sqlalchemy.org/en/latest/cookbook.html#sharing-a-connection-across-one-or-more-programmatic-migration-commands)
 
@@ -58,7 +58,7 @@ Connections are for trusted application code in one thread. Use Core statements 
 
 The foundation uses SQLite's default rollback journal. Before opening a writable SQLite connection, the state API reads only the application ID through a read-only SQLite connection with recovery disabled. A foreign database is rejected without recovering or deleting its journal. Normal opening then validates the revision and integrity. After a writer terminates, an explicit writable opening or migration can recover a recognized rollback journal of a Media Archive database. A read-only opening may fail while recovery is required. [SQLite connection options](https://www.sqlite.org/uri.html#recognized_query_parameters) · [SQLite journal format](https://www.sqlite.org/fileformat.html#the_rollback_journal)
 
-`quick_check` reads database pages and can cost more as state grows. It checks SQLite structural consistency. Historical content verification and device identity require the later state and device subsystems.
+`quick_check` reads database pages and can cost more as state grows. It checks SQLite structural consistency. The history API stores supplied verification evidence. Reading media and establishing physical device identity require their runtime subsystems.
 
 ## Creation, side effects and errors
 

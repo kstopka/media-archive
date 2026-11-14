@@ -5,6 +5,8 @@ import re
 
 from dotenv.parser import parse_stream
 
+from media_archive._encoding import require_utf8
+
 from .errors import ConfigError
 
 
@@ -65,6 +67,7 @@ def entry_names(values: dict[str, str], key: str, inferred: set[str]) -> tuple[s
 
 def parse_env(text: str) -> dict[str, str]:
     """Use python-dotenv syntax, then validate application keys and duplicates."""
+    require_utf8(text, ConfigError)
     values: dict[str, str] = {}
     # The library parser preserves duplicate assignments and syntax errors.
     # Unlike dotenv_values(), it does not silently skip malformed statements

@@ -4,6 +4,8 @@ Read [the technical index](README.md) before opening the entire source tree. Thi
 
 ## Environment and commands
 
+Use UTF-8 for source files, documentation, configuration and text reports. Set the encoding explicitly for text I/O. Application paths and text passed into storage APIs must be representable in UTF-8. Report incompatible input without exposing the private value. Media files are binary and their bytes are preserved.
+
 Python >=3.11 is required. Runtime dependency ranges are declared in [pyproject.toml](../pyproject.toml); no additional test runner is required.
 
 ```bash
@@ -37,6 +39,7 @@ The SQLite foundation verification passed **122 tests on Python 3.14.4 with SQLi
 | [test_collection_config.py](../tests/test_collection_config.py) | Current generic model: root/month scopes, nearest policy, new profiles/volumes, unassigned collections, reference/tree/storage rejection, explicit deletion eligibility, no-write behavior and archive names with `_TARGET_`/ambiguous prefixes |
 | [test_config_identities.py](../tests/test_config_identities.py) | Display label edits/defaults , unknown IDs and explicit registration, retained offline identities, hardware changes and no-write checks |
 | [test_state_database.py](../tests/test_state_database.py) | Explicit SQLite lifecycle, read-only behavior, migration transactions, constraints, publication failures, concurrent creation/migration and recovery after process termination |
+| [test_state_history.py](../tests/test_state_history.py) | Media history, archive requirements, migration and initialization checkpoints |
 | [test_state_registry.py](../tests/test_state_registry.py) | Persistent IDs and bindings, retained archive reservations, explicit hardware changes, concurrent approvals and registration rollback |
 
 `registry_values(root)` reads `.env.examples` and substitutes temporary paths and synthetic identifiers. `write_config` writes only temporary test configuration files. Parser and model tests cover required values, immutable/private DTOs and obsolete-key rejection. Flexibility tests cover source replacement, extra cards/volumes and archive continuation.

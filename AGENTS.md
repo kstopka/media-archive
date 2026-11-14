@@ -9,7 +9,7 @@ Start with [docs/README.md](docs/README.md), then the relevant feature reference
 - `docs/`: public technical documentation, organized by feature as the application grows.
 - `archive_docs/`: ignored local plans, when present; distinguish planned behavior from implemented features.
 
-CLI help and configuration validation work. The [SQLite foundation](docs/state.md) and [registry](docs/registration.md) provide explicit Python APIs for database lifecycle, migrations and registration. Media history and media operations remain unimplemented.
+CLI help and configuration validation work. The [SQLite foundation](docs/state.md) and [registry](docs/registration.md) provide explicit Python APIs for database lifecycle, migrations and registration. The [history API](docs/history.md) records media evidence and initialization progress. Media operations remain unimplemented.
 
 ## Build, Test, and Development Commands
 
@@ -31,6 +31,8 @@ Configuration checks read `.env` without writing state or contacting devices.
 Use four-space indentation, type hints, `snake_case` functions and `PascalCase` classes. Follow immutable Pydantic models and safe `ConfigError` diagnostics. Collections own paths; sources reference IDs. Never infer behavior from names like `main`. No formatter/linter is configured.
 
 Prefer current, documented practices that are proven with the project's supported Python and library versions. Use recommended replacements for deprecated APIs and typing patterns when available.
+
+Use UTF-8 for project text, configuration, reports, and paths handled by the application. Set the encoding explicitly for text I/O. Reject text or paths that cannot be represented in UTF-8 at the relevant API boundary with a safe error that omits private input. Preserve media contents byte for byte.
 
 ## Testing Guidelines
 

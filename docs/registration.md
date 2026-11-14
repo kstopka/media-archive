@@ -49,7 +49,7 @@ Local volumes, archive targets, phones and camera cards have separate roles. Arc
 
 A disabled phone profile retains its previous association. A card can be registered before its UUID is available. Its first registered UUID establishes the first volume episode. Clearing a known card UUID in configuration fails the registry check. UUID comparisons are case-insensitive. A known historical UUID or phone serial remains reserved to prevent accidentally registering the same evidence for a new device or episode. Resolving reused hardware identifiers requires a separate workflow.
 
-Registered evidence records an operator-approved configuration association. Physical presence, mount safety, physical independence and cloned-device detection require runtime verification. Registration leaves media history and initialization to their respective stages.
+Registered evidence records an operator-approved configuration association. Physical presence, mount safety, physical independence and cloned-device detection require runtime verification. The [history and initialization APIs](history.md) record evidence and progress separately from registration.
 
 ## Errors and verification
 

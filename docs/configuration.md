@@ -20,6 +20,8 @@ The package also exports `ConfigModel`, `AppSettings`, `LocalSettings`, `LocalVo
 
 ## Parsing and identifiers
 
+Configuration text and paths must be representable in UTF-8. The loader accepts a UTF-8 BOM and reports invalid encoding as `ConfigError` without including the private input.
+
 `env.parse_env()` uses `dotenv.parser.parse_stream`, preserving syntax errors and duplicate assignments before a dictionary is built. It accepts python-dotenv comments, quotes, escape handling and optional `export`. It rejects unknown keys, malformed assignments, missing `=`, duplicate keys and parsed values with characters below code point 32 other than tabs. Multiline values therefore fail. Error messages include a line number or recognized setting name, not its value.
 
 `.env` parameter keys are uppercase. Registry-list entries and ID references accept either case. `entry_names()` trims comma-separated list items and normalizes them to uppercase internally; models expose lowercase registry IDs. IDs use `[a-z][a-z0-9_]*`. An explicit list preserves its order and rejects duplicates or settings for unlisted entries. If a list is absent, names are inferred from entry keys and sorted. An explicitly empty list cannot coexist with settings for its entries.

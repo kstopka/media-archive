@@ -12,6 +12,13 @@ from tests.config_fixtures import registry_values, write_config
 
 
 class EnvParserTests(unittest.TestCase):
+    def test_non_utf8_text_and_path_raise_safe_config_error(self) -> None:
+        for operation, value in ((parse_env, "# private-name-\udcff"), (load_config, "private-name-\udcff")):
+            with self.assertRaisesRegex(ConfigError, "UTF-8") as failure:
+                operation(value)
+            self.assertNotIn("private-name", str(failure.exception))
+            self.assertIsNone(failure.exception.__context__)
+
     def test_comments_quotes_empty_values_and_literal_content(self) -> None:
         self.assertEqual(
             parse_env(

@@ -2,7 +2,7 @@
 
 This directory contains technical documentation for developers and AI agents. Start here before reading application source. The implementation reference describes **implemented behavior**; the roadmap and `design/` pages are explicitly marked plans. All pages are public: examples must contain synthetic paths and identifiers only.
 
-Current coverage includes the package and CLI skeleton, configuration, SQLite lifecycle and persistent registration. Archive operations remain planned.
+Current coverage includes the package and CLI skeleton, configuration, SQLite lifecycle, persistent registration and media history. Archive operations remain planned.
 
 ## Reading order
 
@@ -13,6 +13,7 @@ Current coverage includes the package and CLI skeleton, configuration, SQLite li
 | [identities.md](identities.md) | Stable IDs, display labels and the in-memory identity guard |
 | [state.md](state.md) | Explicit SQLite creation/opening, transactions, migration API, errors and limits |
 | [registration.md](registration.md) | Persistent identities, registered destinations, device changes and approval API |
+| [history.md](history.md) | Media occurrences, evidence, archive requirements and initialization |
 | [development.md](development.md) | Environment, tests, change locations and documentation maintenance |
 | [Project README](../README.md) | Installation and user-facing configuration overview |
 | [.env.examples](../.env.examples) | Complete example of the current registry-based configuration |
@@ -28,6 +29,7 @@ For a configuration change, read the architecture and relevant configuration sec
 | Display names and identity checks | [Identity contract](identities.md) |
 | SQLite lifecycle and schema migrations | [State foundation](state.md) |
 | Persistent configuration registration | [Registry API](registration.md) |
+| Media history and initialization | [History API](history.md) |
 
 As features grow, give each feature its own page and register it here. Before creating or editing a feature, read its technical reference and any linked AI-specific instructions. Shared architecture and development rules remain in their existing pages; create additional instruction files only when necessary.
 
@@ -52,7 +54,8 @@ These documents use neutral examples and do not depend on private planning notes
 | Stable identity guard | In-memory key checks, with trusted keys loaded from SQLite by the registry API |
 | SQLite | Explicit creation/opening, schema validation, transactions and migrations through a Python API |
 | Persistent registration | Explicit Python API for identities, bindings, archive destination reservations and hardware changes |
-| Media history and operation journal | Planned, including initialization state and long-running operation locks |
+| Media history and initialization | Python APIs for recording evidence, archive requirements and resumable progress |
+| Operation journal | Planned, including long-running operation locks |
 | IMPORT, SORT, BACKUP, AUDIT | Not implemented |
 | Backup menu/month availability | Not implemented; configuration records intended scope and filtering mode |
 | Configuration wizard | Future enhancement; settings are currently edited in `.env` |

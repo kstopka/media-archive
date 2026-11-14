@@ -2,7 +2,7 @@
 
 This public roadmap tracks project milestones. Checkboxes mark completed milestones. For currently available behavior, see the [technical documentation](README.md).
 
-The CLI skeleton, configuration loader, SQLite lifecycle and persistent registration APIs are available. Media history, media operations and the configuration wizard remain planned. See the [SQLite state reference](state.md).
+The CLI skeleton, configuration loader, SQLite lifecycle, persistent registration and [history APIs](history.md) are available. Media operations and the configuration wizard remain planned. See the [SQLite state reference](state.md).
 
 Design references: [archive workflows and state](design/archive-workflows.md) and [future configurator](design/configurator.md). Future module boundaries, database details and command syntax must be finalized during the relevant implementation task.
 
@@ -81,7 +81,7 @@ Backup is ready for normal use only after the **entire stage**, including snapsh
 
 ## Deferred features
 
-- **Unusual database paths.** Handle or explicitly reject names near filesystem limits that leave insufficient room for SQLite's sidecar suffixes, and paths containing bytes outside UTF-8, before publishing a database.
+- **Unusual database paths.** Handle or explicitly reject names near filesystem limits that leave insufficient room for SQLite's sidecar suffixes before publishing a database.
 - Interactive configuration wizard: [design/configurator.md](design/configurator.md), after core operations work.
 - **Configurable sorting rules** (deferred): allow collections to select reusable, named sorting rules instead of requiring the current source-specific layouts. Keep `year_month` for phone collections and `camera_day` for camera collections as current defaults; adding the feature must not reorganize existing files automatically. Define rule inputs, destinations and migration behavior in a separate design before implementation.
 - Additional media-type filters; details require a separate design.
