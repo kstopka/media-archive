@@ -32,7 +32,7 @@ def load_registry(values: dict[str, str], source: Path) -> Configuration:
     return build(Configuration, {
         "source_file": source,
         "app": build(AppSettings, fields(values, "APP", (
-            "timezone", "config_file", "database_file", "reports_dir", "min_free_bytes",
+            "timezone", "config_file", "state_dir", "reports_dir", "min_free_bytes",
             "report_keep_runs", "database_keep_generations", "archive_state_dir",
         )), "APP"),
         "local": build(LocalSettings, {"volumes": volumes, **fields(values, "LOCAL", ("staging_root", "undated_root"))}, "LOCAL"),

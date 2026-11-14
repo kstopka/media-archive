@@ -15,6 +15,7 @@ Current coverage includes the package and CLI skeleton, configuration, SQLite li
 | [registration.md](registration.md) | Persistent identities, registered destinations, device changes and approval API |
 | [history.md](history.md) | Media occurrences, evidence, archive requirements and initialization |
 | [journal.md](journal.md) | Operation attempts, resource locks and recovery |
+| [cli.md](cli.md) | Setup, migrations, planning, journal previews and report retention |
 | [development.md](development.md) | Environment, tests, change locations and documentation maintenance |
 | [Project README](../README.md) | Installation and user-facing configuration overview |
 | [.env.examples](../.env.examples) | Complete example of the current registry-based configuration |
@@ -49,7 +50,7 @@ These documents use neutral examples and do not depend on private planning notes
 
 | Area | Current implementation |
 | --- | --- |
-| CLI | Help, `--config`, `--check-config`, exit codes 0/2 |
+| CLI | Help, configuration checks, setup, migration, journal previews and reports |
 | Configuration | Literal `.env` parsing, immutable models, references, collection trees and lexical storage validation |
 | Collections and policies | Configuration and pure lookup methods; no scanning or file mutations |
 | Sources/storage | Phone/camera/card and disk descriptions; no discovery or hardware verification |

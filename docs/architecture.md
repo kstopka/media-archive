@@ -57,17 +57,7 @@ Paths below are relative to the repository root.
 
 Both `python -m media_archive` and the installed `media-archive` script reach `media_archive.cli.main(argv=None)`.
 
-| Invocation | Behavior | Process status |
-| --- | --- | --- |
-| No arguments | Display help; do not read configuration | 0 |
-| `-h` / `--help` | argparse displays help, including when `--config` is present | 0 |
-| `--check-config` | Validate `.env` in the current working directory | 0 or 2 |
-| `--config FILE` | Validate exactly that file, even without `--check-config` | 0 or 2 |
-| Unknown command/argument | argparse argument error; no operation is executed | 2 |
-
-Normal help-with-no-arguments and validation branches return integers from `main()`. argparse itself raises `SystemExit` for explicit help and argument errors. Successful validation prints that device availability and identity were not checked. A `ConfigError` prints to stderr and returns 2; private values and tracebacks are not forwarded by this branch.
-
-No IMPORT/SORT/BACKUP/AUDIT subcommands or `--dry-run` option exist yet.
+The [CLI reference](cli.md) describes setup, migrations, read-only journal previews, report storage and exit statuses. Command handlers reuse the configuration loader, state registry and operation journal. Media execution remains in the planned workflow layer.
 
 ## Configuration execution
 

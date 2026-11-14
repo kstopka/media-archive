@@ -202,7 +202,7 @@ AUDIT reports damaged copies. A separately invoked repair action presents the af
 
 ### Reports and state recovery
 
-Reports are Polish text and JSON, with run IDs, scope, target outcomes, counts, errors, conflicts and unverified files. Retain 20 completed report runs; preserve import history and required resume state independently. Final operational exit/resume contracts remain to be specified; currently only configuration/help statuses 0/2 exist.
+Reports are Polish text and JSON, with run IDs, scope, target outcomes, counts, errors, conflicts and unverified files. Retain 20 completed report runs; preserve import history and required resume state independently. The [CLI contract](../cli.md) defines exit codes, report retention and how to select an operation for a recovery preview.
 
 Each backup creates a consistent SQLite/configuration snapshot after recording its results, saved under `.media-archive` on connected registered writable archives outside data/audit roots. Keep five validated generations per disk, deleting older generations only after a new valid snapshot exists. Use an active-database-safe snapshot mechanism rather than copying only the main database file during writes. Snapshot failure makes the backup result incomplete.
 

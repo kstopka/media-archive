@@ -399,7 +399,7 @@ class CollectionConfigurationTests(unittest.TestCase):
         cases = {
             'LOCAL_STAGING_ROOT': self.values['COLLECTION_PHOTOS_LOCAL_ROOT'] + '/stage',
             'LOCAL_UNDATED_ROOT': self.values['ARCHIVE_DATA_TARGET_A_MOUNT'] + '/undated',
-            'APP_DATABASE_FILE': self.values['LOCAL_VOLUME_WORKING_ROOT'] + '/state.sqlite3',
+            'APP_STATE_DIR': self.values['LOCAL_VOLUME_WORKING_ROOT'] + '/state.sqlite3',
             'COLLECTION_DOCUMENTS_LOCAL_ROOT': str(self.root / 'unregistered'),
             'ARCHIVE_DATA_TARGET_B_UUID': self.values['ARCHIVE_DATA_TARGET_A_UUID'].upper(),
             'CAMERA_CARD_A_UUID': self.values['LOCAL_VOLUME_WORKING_UUID'],

@@ -44,6 +44,17 @@ def _may_have_published(attempt: RowMapping) -> bool:
     return bool(attempt.reconciling) or attempt.state in ("verified", "published")
 
 
+def recommended_recovery(attempt: RowMapping | None) -> Literal["restart", "reconcile"] | None:
+    """Choose a recovery mode from the recorded state, without checking lock ownership."""
+    if attempt is None:
+        return None
+    if attempt.state == "needs_review":
+        return "reconcile"
+    if attempt.state in _ACTIVE:
+        return "reconcile" if _may_have_published(attempt) else "restart"
+    return None
+
+
 def _event(connection: Connection, attempt_id: int, state: str, error_code: str | None = None,
            observation_id: int | None = None) -> None:
     connection.execute(events.insert().values(

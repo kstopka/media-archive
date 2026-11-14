@@ -49,10 +49,11 @@ NOW = datetime(2026, 11, 14, tzinfo=timezone.utc)
 class StateJournalTests(unittest.TestCase):
     def setUp(self) -> None:
         self.root = Path(self.enterContext(TemporaryDirectory()))
-        self.path = self.root / "state.sqlite3"
+        self.path = self.root / "state" / "state.sqlite3"
+        self.path.parent.mkdir()
         config_file = self.root / "settings.env"
         values = registry_values(self.root)
-        values["APP_DATABASE_FILE"] = str(self.path)
+        values["APP_STATE_DIR"] = str(self.path.parent)
         write_config(config_file, values)
         self.config = load_config(config_file)
         self.photos = collection_resource(self.config, "photos")

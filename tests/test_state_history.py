@@ -29,9 +29,10 @@ class StateHistoryTests(unittest.TestCase):
     def setUp(self) -> None:
         self.root = Path(self.enterContext(TemporaryDirectory()))
         self.settings = self.root / "settings.env"
-        self.path = self.root / "state.sqlite3"
+        self.path = self.root / "state" / "state.sqlite3"
+        self.path.parent.mkdir()
         self.values = registry_values(self.root)
-        self.values["APP_DATABASE_FILE"] = str(self.path)
+        self.values["APP_STATE_DIR"] = str(self.path.parent)
         for alias in ("C", "D"):
             self.values[f"ARCHIVE_DATA_TARGET_{alias}_UUID"] = f"synthetic-{alias}"
             self.values[f"ARCHIVE_DATA_TARGET_{alias}_MOUNT"] = str(self.root / f"archive-{alias}")

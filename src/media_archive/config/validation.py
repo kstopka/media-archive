@@ -132,8 +132,14 @@ def _storage(config: Configuration) -> None:
             raise ConfigError("Staging i pliki bez daty muszą leżeć poza zbiorami.")
         if any(_overlap(path, target.mount) for target in targets):
             raise ConfigError("Staging i pliki bez daty muszą leżeć poza archiwami.")
-    state = [config.source_file, config.app.database_file, config.app.reports_dir]
-    _disjoint(state, "Konfiguracja, baza i raporty wymagają rozłącznych ścieżek.")
+    state = [config.source_file, config.app.state_dir, config.app.reports_dir]
+    _disjoint([config.source_file, config.app.state_dir], "Konfiguracja musi leżeć poza katalogiem stanu.")
+    _disjoint([config.source_file, config.app.reports_dir], "Konfiguracja musi leżeć poza katalogiem raportów.")
+    if config.app.state_dir.is_relative_to(config.app.reports_dir) or any(
+        _overlap(config.app.reports_dir, config.app.database_file.with_name(f"state.sqlite3{suffix}"))
+        for suffix in ("", "-journal", "-wal", "-shm")
+    ):
+        raise ConfigError("Katalog raportów koliduje z bazą stanu.")
     roots = [volume.root for volume in volumes] + [target.mount for target in targets] + [staging, undated]
     if any(_overlap(path, root) for path in state for root in roots):
         raise ConfigError("Konfiguracja, baza i raporty muszą pozostać poza woluminami danych i archiwów.")

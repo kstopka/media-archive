@@ -27,7 +27,7 @@ class EnvParserTests(unittest.TestCase):
                 "PHONE_MAIN_BUILD=abc#123 # comment\n"
                 "PHONE_SECONDARY_SERIAL= # disabled\n"
                 "PHONE_SECONDARY_TRANSPORT=''\n"
-                "APP_DATABASE_FILE='/literal/$HOME/$(touch marker)/file\\name'\n"
+                "APP_STATE_DIR='/literal/$HOME/$(touch marker)/file\\name'\n"
             ),
             {
                 "APP_CONFIG_FILE": ".env",
@@ -35,7 +35,7 @@ class EnvParserTests(unittest.TestCase):
                 "PHONE_MAIN_BUILD": "abc#123",
                 "PHONE_SECONDARY_SERIAL": "",
                 "PHONE_SECONDARY_TRANSPORT": "",
-                "APP_DATABASE_FILE": "/literal/$HOME/$(touch marker)/file\\name",
+                "APP_STATE_DIR": "/literal/$HOME/$(touch marker)/file\\name",
             },
         )
 
@@ -190,7 +190,7 @@ class ConfigTests(unittest.TestCase):
     def test_required_values_and_types(self) -> None:
         cases = {
             "APP_CONFIG_FILE": ("", "   "),
-            "APP_DATABASE_FILE": ("", "relative/file", "~/state", "/tmp/../state"),
+            "APP_STATE_DIR": ("", "relative/file", "~/state", "/tmp/../state"),
             "APP_TIMEZONE": ("", "Invalid/PrivateValue", "../UTC"),
             "APP_MIN_FREE_BYTES": ("-1", "0", "1", "1.5", "not-a-number"),
             "APP_REPORT_KEEP_RUNS": ("0", "-2", "2.5"),
@@ -214,8 +214,8 @@ class ConfigTests(unittest.TestCase):
                         self.load()
                     self.assertNotIn("PrivateValue", str(caught.exception))
             self.values[key] = original
-        del self.values["APP_DATABASE_FILE"]
-        with self.assertRaisesRegex(ConfigError, "APP_DATABASE_FILE"):
+        del self.values["APP_STATE_DIR"]
+        with self.assertRaisesRegex(ConfigError, "APP_STATE_DIR"):
             self.load()
 
     def test_document_archive_path_is_required(self) -> None:
@@ -229,7 +229,7 @@ class ConfigTests(unittest.TestCase):
             "LOCAL_UNDATED_ROOT": self.values["COLLECTION_GOPRO_LOCAL_ROOT"] + "/undated",
             "COLLECTION_GOPRO_LOCAL_ROOT": self.values["COLLECTION_PHOTOS_LOCAL_ROOT"],
             "COLLECTION_PHOTOS_MAIN_LOCAL_ROOT": str(self.root / "elsewhere"),
-            "APP_DATABASE_FILE": self.values["LOCAL_VOLUME_WORKING_ROOT"] + "/state.sqlite3",
+            "APP_STATE_DIR": self.values["LOCAL_VOLUME_WORKING_ROOT"] + "/state.sqlite3",
             "APP_REPORTS_DIR": self.values["ARCHIVE_DATA_TARGET_A_MOUNT"] + "/reports",
             "COLLECTION_REVIEW_ARCHIVE_RELATIVE": self.values["COLLECTION_REVIEWED_ARCHIVE_RELATIVE"],
             "COLLECTION_DOCUMENTS_ARCHIVE_RELATIVE": (
@@ -251,10 +251,10 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             self.load()
         self.values["LOCAL_STAGING_ROOT"] = str(self.root / "external-staging")
-        self.values["APP_DATABASE_FILE"] = self.values["LOCAL_STAGING_ROOT"] + "/state.sqlite3"
+        self.values["APP_STATE_DIR"] = self.values["LOCAL_STAGING_ROOT"] + "/state.sqlite3"
         with self.assertRaises(ConfigError):
             self.load()
-        self.values["APP_DATABASE_FILE"] = str(self.path)
+        self.values["APP_STATE_DIR"] = str(self.path)
         with self.assertRaises(ConfigError):
             self.load()
 

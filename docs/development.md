@@ -35,6 +35,7 @@ The SQLite foundation verification passed **122 tests on Python 3.14.4 with SQLi
 
 | File | Coverage |
 | --- | --- |
+| [test_operational_cli.py](../tests/test_operational_cli.py) | Atomic setup, read-only planning, pending operations and report retention |
 | [test_cli.py](../tests/test_cli.py) | Installed-package subprocess in isolated Python mode (`-I`), help, the registry configuration, argument errors, exit codes, private-value diagnostics and absence of new runtime files |
 | [test_collection_config.py](../tests/test_collection_config.py) | Current generic model: root/month scopes, nearest policy, new profiles/volumes, unassigned collections, reference/tree/storage rejection, explicit deletion eligibility, no-write behavior and archive names with `_TARGET_`/ambiguous prefixes |
 | [test_config_identities.py](../tests/test_config_identities.py) | Display label edits/defaults , unknown IDs and explicit registration, retained offline identities, hardware changes and no-write checks |

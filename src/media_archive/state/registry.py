@@ -15,7 +15,7 @@ from media_archive.config import (
 from media_archive.config.validation import validate_relationships
 
 from . import _registry_tables as tables
-from .database import open_database, transaction
+from .database import create_database, open_database, transaction
 from .errors import StateError
 from .migrations import schema_version
 
@@ -336,3 +336,13 @@ def register_configuration(config: Configuration, *, device_changes: Iterable[De
         _check_configuration(connection, config, register=True, changes=changes)
         if changes:
             raise ConfigError("Potwierdzona zmiana urządzenia nie odpowiada konfiguracji.")
+
+
+def initialize_database(config: Configuration) -> None:
+    """Publish a new database only after recording its initial registry."""
+    validate_relationships(config)
+
+    def register(connection: Connection) -> None:
+        _check_configuration(connection, config, register=True, changes={})
+
+    create_database(config.app.database_file, initialize=register)

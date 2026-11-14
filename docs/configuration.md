@@ -42,7 +42,7 @@ All DTOs derive from `ConfigModel`: `frozen=True`, unknown model fields forbidde
 | --- | --- | --- |
 | `AppSettings.timezone` | `APP_TIMEZONE` | Valid available `ZoneInfo` name |
 | `declared_config_file` | `APP_CONFIG_FILE` | Nonblank path metadata, relative or absolute; model input alias is `config_file` |
-| `database_file` | `APP_DATABASE_FILE` | Absolute path |
+| `state_dir` | `APP_STATE_DIR` | Absolute directory containing `state.sqlite3` |
 | `reports_dir` | `APP_REPORTS_DIR` | Absolute path |
 | `min_free_bytes` | `APP_MIN_FREE_BYTES` | Decimal integer >= 1073741824 |
 | `report_keep_runs` | `APP_REPORT_KEEP_RUNS` | Positive decimal integer |

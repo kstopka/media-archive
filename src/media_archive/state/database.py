@@ -1,6 +1,6 @@
 """Explicit database lifecycle and short transactions, independent of the CLI."""
 
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import closing, contextmanager
 import os
 from pathlib import Path
@@ -16,7 +16,7 @@ from sqlalchemy.pool import ConnectionPoolEntry, NullPool
 
 from media_archive._encoding import require_utf8
 
-from .errors import StateError
+from .errors import DatabasePublishedError, StateError
 from .migrations import APPLICATION_ID, _head_revision, _upgrade, schema_version
 
 
@@ -139,11 +139,13 @@ def _connect(
     path: Path, *, writable: bool, migrating: bool = False, initializing: bool = False,
 ) -> Generator[Connection, None, None]:
     try:
-        regular_file = stat.S_ISREG(path.lstat().st_mode)
+        info = path.lstat()
     except OSError:
         raise StateError("Nie można otworzyć istniejącej bazy stanu.") from None
-    if not regular_file:
+    if not stat.S_ISREG(info.st_mode):
         raise StateError("Baza stanu musi być zwykłym plikiem.")
+    if migrating and not initializing and info.st_nlink != 1:
+        raise StateError("Migracja wymaga pliku bazy bez dodatkowych dowiązań twardych.")
     engine = _engine(path, writable=writable, migrating=migrating, initializing=initializing)
     try:
         with engine.connect() as connection:
@@ -232,7 +234,7 @@ def open_database(
         yield connection
 
 
-def create_database(path: str | Path) -> None:
+def create_database(path: str | Path, *, initialize: Callable[[Connection], None] | None = None) -> None:
     """Build a private database and publish it atomically without replacement.
 
     The parent directory must already exist and support same-filesystem hard links.
@@ -247,15 +249,24 @@ def create_database(path: str | Path) -> None:
                     connection.exec_driver_sql(f"PRAGMA main.application_id = {APPLICATION_ID}")
                     _upgrade(connection)
                     _validate(connection)
+            if initialize is not None:
+                with open_database(temporary, writable=True) as connection, transaction(connection):
+                    initialize(connection)
             with temporary.open("rb") as handle:
                 os.fsync(handle.fileno())
             _check_sidecars(destination, allow_journal=False)
             os.link(temporary, destination)
-            directory_fd = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY)
             try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
+                directory_fd = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+            except OSError:
+                raise DatabasePublishedError(
+                    "Baza jest pod docelową nazwą, ale trwałość zapisu nie została potwierdzona. "
+                    "Sprawdź ją poleceniem setup --dry-run. Ponowne setup --yes odmówi zastąpienia bazy."
+                ) from None
     except OSError:
         raise StateError("Nie można ukończyć tworzenia nowej bazy stanu.") from None
 

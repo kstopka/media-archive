@@ -1,6 +1,6 @@
 # SQLite state foundation
 
-The SQLite state API provides explicit database creation, opening, schema validation, transactions and migrations. SQLAlchemy Core manages connections and transactions. Alembic manages schema revisions. The [persistent registry](registration.md) records identities and approved configuration bindings. The [history API](history.md) records media evidence and initialization progress. The [operation journal](journal.md) records attempts and coordinates process-held locks. Operational CLI commands belong to task 1.4.
+The SQLite state API provides explicit database creation, opening, schema validation, transactions and migrations. SQLAlchemy Core manages connections and transactions. Alembic manages schema revisions. The [persistent registry](registration.md) records identities and approved configuration bindings. The [history API](history.md) records media evidence and initialization progress. The [operation journal](journal.md) records attempts and coordinates process-held locks. The operator can create or migrate state through the [CLI](cli.md).
 
 ## Entry points and ownership
 
@@ -8,10 +8,10 @@ The SQLite state API provides explicit database creation, opening, schema valida
 
 | API | Contract |
 | --- | --- |
-| `create_database(path) -> None` | Explicitly build and publish a new database with the current schema. The parent directory must exist. Any existing destination, including an empty file or dangling symlink, prevents publication. |
+| `create_database(path, *, initialize=None) -> None` | Explicitly build and publish a new database with the current schema. The parent directory must exist. Any existing destination, including an empty file or dangling symlink, prevents publication. An optional initializer runs in a regular write transaction on the temporary database before publication. |
 | `open_database(path, *, writable=False)` | Context manager yielding a SQLAlchemy Core `Connection` to an existing regular file. Default access is read-only. Validate identity, revision and SQLite `quick_check`. For writable access, check that SQLite can create its journal by writing and rolling back a probe before yielding. Close the connection on exit. |
 | `schema_version(connection) -> str` | Return the applied Alembic revision after checking application identity. Accept a known older revision for inspection. |
-| `migrate_database(path) -> str` | Explicitly apply all pending revisions in one write transaction and return the applied revision. Recheck the revision after obtaining the write lock. Calling it again at the current revision applies no schema changes. |
+| `migrate_database(path) -> str` | Explicitly apply all pending revisions in one write transaction and return the applied revision. Reject a database with additional hard links before opening it for migration. Recheck the revision after obtaining the write lock. Calling it again at the current revision applies no schema changes. |
 | `transaction(connection)` | Context manager for a short write transaction on a writable connection supplied by the state API. Commit on normal exit, roll back on exceptions or interruption, including a failed commit. Reject nested transactions and driver-level autocommit. |
 | `StateError` | Application-level failure with a Polish diagnostic that excludes database paths, SQL text and values. |
 
@@ -66,11 +66,11 @@ Creation builds the schema inside a private temporary directory beside the desti
 
 Creation refuses to publish beside an existing SQLite sidecar. Opening checks sidecar paths before connecting and checks them again before beginning a writable transaction. Existing `-wal` and `-shm` paths, links, and files without a recognizable rollback-journal header cause a safe error and remain in place. An ambiguous or incomplete journal requires operator inspection. Keep the database and its sidecar names under application control in the trusted state directory.
 
-Ordinary creation failures remove temporary state. If directory syncing fails after publication, the API raises `StateError` and preserves the published, valid database. The caller should inspect that database before retrying. Process termination during preparation may leave a private temporary directory for later operator inspection.
+Ordinary creation failures remove temporary state. If directory syncing fails after publication, the API raises `DatabasePublishedError`, a subclass of `StateError`, and preserves the published, valid database. The caller should inspect that database before retrying. Process termination during preparation may leave a private temporary directory for later operator inspection.
 
 Writable operations may create SQLite rollback journals. Writable opening briefly changes the revision row inside a rolled-back probe. This checks that SQLite can write the journal, including when the database file is writable but its parent directory is read-only. The probe leaves the stored revision unchanged. Default read-only opening preserves database contents and performs no schema updates. Externally changing connection or journal settings is outside the supported lifecycle.
 
-Filesystem and SQLite failures become `StateError` without forwarding their underlying diagnostic text. Application exceptions from a transaction body propagate after rollback. Explicitly supplied SQL and raw connection use remain the responsibility of trusted callers. Database creation and migration have no CLI entry points yet and never run as a side effect of help, `load_config()` or `--check-config`.
+Filesystem and SQLite failures become `StateError` without forwarding their underlying diagnostic text. Application exceptions from a transaction body propagate after rollback. Explicitly supplied SQL and raw connection use remain the responsibility of trusted callers. Explicit database creation and migration are available through the CLI. Help and configuration checks only read their respective inputs.
 
 ## Verification and limits
 
@@ -78,10 +78,14 @@ Filesystem and SQLite failures become `StateError` without forwarding their unde
 
 This foundation provides schema migration transactions. The journal coordinates long-running locks. File transfers, physical-device validation, snapshots and restore are delivered in their respective later tasks. Tests on temporary state establish the exercised software behavior. They do not establish power-loss guarantees for a particular production filesystem or hardware.
 
-## Planned first setup and upgrades
+## First setup and upgrades
 
-Task 1.4 will give each installation one working database named `state.sqlite3`. The operator will configure the state directory, and the application will choose the filename. The current configuration still takes the full path in `APP_DATABASE_FILE`.
+Each installation uses one working database named `state.sqlite3` in `APP_STATE_DIR`.
 
 1. During first setup, create the database and record the initial state after the operator confirms the configuration. Protect any existing file at the destination. Configuration checks remain read-only.
 2. During normal operation, open the same database and append or update records as needed. When an application update requires a schema change, run Alembic explicitly against the same file and preserve its data.
 3. If an existing installation's database is missing, report the error and stop the operation. New database creation remains an explicit setup action so that a missing file cannot silently start a new history.
+
+For an existing installation configured with `APP_DATABASE_FILE`, stop every process that uses the database before changing its location. Keep a verified backup. If SQLite sidecar files remain, recover the database at its original path using the previous version's writable state API and close all connections before proceeding. Preserve any sidecars needed for recovery. If recovery cannot be completed, resolve that first or restore from the backup.
+
+If the file already has the name `state.sqlite3`, use its parent directory as `APP_STATE_DIR`. Otherwise, move the closed database to `state.sqlite3` in the selected directory, preserving its permissions and protecting any existing destination or SQLite sidecars from replacement. Replace `APP_DATABASE_FILE` in `.env` with `APP_STATE_DIR`. Run `media-archive migrate --dry-run` and confirm it recognizes the existing Media Archive database and reports the expected revision. Then run `media-archive migrate`. Reserve `setup --yes` for a new installation.

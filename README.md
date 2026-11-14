@@ -42,11 +42,13 @@ With the virtual environment active:
 
 ```bash
 python -m media_archive --check-config
+python -m media_archive setup --dry-run
+python -m media_archive setup --yes
 python -m media_archive --config "/absolute/path/to/custom.env"
 python -m unittest discover -s tests -v
 ```
 
-Configuration checks do not create a database, change files or contact devices. They validate settings, not physical disk availability or identity.
+Setup creates `state.sqlite3` in `APP_STATE_DIR`. The [CLI reference](docs/cli.md) covers migration, recovery previews and reports. Configuration checks do not create a database, change files or contact devices. They validate settings, not physical disk availability or identity.
 
 ## Documentation
 

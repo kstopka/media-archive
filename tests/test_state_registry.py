@@ -21,10 +21,11 @@ class StateRegistryTests(unittest.TestCase):
     def setUp(self) -> None:
         directory = self.enterContext(TemporaryDirectory())
         self.root = Path(directory)
-        self.path = self.root / "state.sqlite3"
+        self.path = self.root / "state" / "state.sqlite3"
+        self.path.parent.mkdir()
         self.settings = self.root / "settings.env"
         self.values = registry_values(self.root)
-        self.values["APP_DATABASE_FILE"] = str(self.path)
+        self.values["APP_STATE_DIR"] = str(self.path.parent)
 
     def config(self, **changes: str | None) -> Configuration:
         values = self.values.copy()

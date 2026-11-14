@@ -20,7 +20,7 @@ class CliTests(unittest.TestCase):
             config = root / config_name
             # Even with configuration present, help must not create state.
             config_text = (
-                f"APP_DATABASE_FILE='{root / 'state' / 'state.sqlite3'}'\n"
+                f"APP_STATE_DIR='{root / 'state'}'\n"
                 f"APP_REPORTS_DIR='{root / 'reports'}'\n"
                 f"LOCAL_STAGING_ROOT='{root / 'staging'}'\n"
             )

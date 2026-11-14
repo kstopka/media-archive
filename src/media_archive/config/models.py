@@ -1,6 +1,6 @@
 """Application, source and archive DTOs; collection rules live in collections.py."""
 
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
 
 from pydantic import Field
@@ -16,12 +16,16 @@ from .field_types import (
 class AppSettings(ConfigModel):
     timezone: Timezone
     declared_config_file: Annotated[ConfigFilePath, Field(validation_alias="config_file")]
-    database_file: AbsolutePath
+    state_dir: AbsolutePath
     reports_dir: AbsolutePath
     min_free_bytes: ReserveBytes
     report_keep_runs: PositiveCount
     database_keep_generations: PositiveCount
     archive_state_dir: SingleFolder
+
+    @property
+    def database_file(self) -> Path:
+        return self.state_dir / "state.sqlite3"
 
 
 class LocalVolume(ConfigModel):
