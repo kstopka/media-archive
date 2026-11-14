@@ -2,12 +2,14 @@
 
 import argparse
 from collections.abc import Sequence
+from pathlib import Path
 import sys
 
 from media_archive import operations
 from media_archive.config import ConfigError, load_config
 from media_archive.reports import Report, write_report
 from media_archive.state import DatabasePublishedError, StateError
+from media_archive.state.snapshots import SnapshotPublishedError, create_snapshot, restore_snapshot, validate_snapshot
 
 
 def _operation_id(value: str) -> int:
@@ -35,6 +37,13 @@ def _parser() -> argparse.ArgumentParser:
     commands.add_parser("pending", help="wyświetl niedokończone operacje")
     resume = commands.add_parser("resume", help="pokaż plan wznowienia operacji")
     resume.add_argument("operation_id", type=_operation_id, metavar="ID_OPERACJI")
+    snapshot = commands.add_parser("snapshot", help="zapisz generację stanu")
+    snapshot.add_argument("directory", type=Path, metavar="KATALOG")
+    verify = commands.add_parser("verify-snapshot", help="sprawdź zapisaną generację")
+    verify.add_argument("generation", type=Path, metavar="GENERACJA")
+    restore = commands.add_parser("restore", help="przywróć bazę z generacji")
+    restore.add_argument("generation", type=Path, metavar="GENERACJA")
+    restore.add_argument("--yes", action="store_true", help="potwierdź przywrócenie bazy")
     for command in (setup, migrate, resume):
         command.add_argument("--dry-run", action="store_true", help="pokaż plan bez zapisu stanu")
         command.add_argument("--report", action="store_true", help="zapisz raport tekstowy i JSON")
@@ -49,6 +58,16 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         parser.error("--check-config wymaga wywołania bez polecenia.")
     if args.command == "setup" and not (args.dry_run or args.yes):
         parser.error("Użyj setup --dry-run, aby zobaczyć plan, albo setup --yes, aby go wykonać.")
+    if args.command == "restore" and (args.config is None or not args.yes):
+        parser.error("Użyj --config PLIK restore GENERACJA --yes.")
+    if args.command == "verify-snapshot":
+        try:
+            generation = validate_snapshot(args.generation.absolute())
+        except (ConfigError, StateError) as error:
+            print(f"Błąd generacji: {error}", file=sys.stderr)
+            return 1
+        print(f"Generacja {generation.generation_id} poprawna · rewizja {generation.revision}")
+        return 0
     try:
         config = load_config(args.config if args.config is not None else ".env")
     except ConfigError as error:
@@ -72,6 +91,16 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         elif args.command == "migrate":
             details = operations.migrate(config, dry_run=dry_run)
             message = "Plan migracji bazy." if dry_run else "Baza ma aktualny schemat."
+        elif args.command == "snapshot":
+            generation = create_snapshot(config, args.directory.absolute())
+            details = {"Katalog generacji": str(generation)}
+            message = "Zapisano zweryfikowaną generację stanu."
+        elif args.command == "restore":
+            result = restore_snapshot(config, args.generation.absolute())
+            details = {"Generacja": result.generation_id}
+            if result.previous_database is not None:
+                details["Poprzednia baza"] = str(result.previous_database)
+            message = "Przywrócono bazę. Stan wymaga uzgodnienia z nośnikami."
         else:
             if args.command == "resume" and not dry_run:
                 raise StateError("Wznowienie transferu będzie dostępne po wdrożeniu operacji na plikach. "
@@ -85,7 +114,7 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         report = Report(args.command, 2, f"Błąd konfiguracji: {error}", dry_run)
     except KeyboardInterrupt:
         report = Report(args.command, 130, "Przerwano polecenie.", dry_run)
-    except DatabasePublishedError as error:
+    except (DatabasePublishedError, SnapshotPublishedError) as error:
         report = Report(args.command, 3, f"Wynik częściowy. {error}", dry_run)
     except StateError as error:
         report = Report(args.command, 1, f"Błąd wykonania: {error}", dry_run)

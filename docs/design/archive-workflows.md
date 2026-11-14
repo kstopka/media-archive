@@ -204,9 +204,18 @@ AUDIT reports damaged copies. A separately invoked repair action presents the af
 
 Reports are Polish text and JSON, with run IDs, scope, target outcomes, counts, errors, conflicts and unverified files. Retain 20 completed report runs; preserve import history and required resume state independently. The [CLI contract](../cli.md) defines exit codes, report retention and how to select an operation for a recovery preview.
 
-Each backup creates a consistent SQLite/configuration snapshot after recording its results, saved under `.media-archive` on connected registered writable archives outside data/audit roots. Keep five validated generations per disk, deleting older generations only after a new valid snapshot exists. Use an active-database-safe snapshot mechanism rather than copying only the main database file during writes. Snapshot failure makes the backup result incomplete.
+#### Manual state snapshots and restore
 
-Restore explicitly with operations stopped; validate the generation, restore state/configuration and reconcile changes made to media afterward. Restore must not modify media or fabricate missing history. Lost history of content absent from all media cannot be reconstructed by hashing existing files. Database reset is outside v1.
+Manual creation, validation and restore are documented in the [snapshot reference](../snapshots.md).
+
+- Use Python's `sqlite3.Connection.backup()` to take a consistent copy of the active database. A generation contains `state.sqlite3`, a private copy of the configuration used for the snapshot and a UTF-8 JSON manifest with a format version, generation ID, creation time in UTC, SQLite schema revision and both files' SHA-256 hashes. Check that the captured configuration matches the copied database's registry. Prepare and validate the generation in a temporary directory before publishing it under a new name. This stage uses an explicitly selected, trusted directory and synthetic test data.
+- Restore from an explicitly selected generation using a configuration file explicitly selected by the operator. Check the manifest, both checksums, database identity, SQLite integrity and schema revision before replacing any state. For a supported older revision, migrate a prepared copy before checking the selected configuration against its registry. An invalid generation or a configuration mismatch stops restore before replacement. The selected configuration stays in place. The operator can consult the configuration copy in the generation when choosing the recovery configuration.
+- Coordinate through an installation lock keyed to the working database path. Ordinary operations, including setup, migration and snapshot creation, hold shared access for their entire use of the installation. Restore acquires exclusive access before inspecting or replacing live state. Keep the lock independent of the database inode so replacement cannot split coordination across two files. If an existing working database is present, preserve a recovery copy before replacement. Prepare the restored database in the state directory and publish it atomically under `state.sqlite3`.
+- Record a persistent reconciliation requirement inside the prepared database before publication. Preserve the generation's history and unfinished attempts. Future operations that write media must respect the requirement until the later reconciliation workflow accounts for changes since the snapshot. Restore touches application state only. Lost history of content absent from every medium cannot be reconstructed by hashing existing files. Database reset is outside v1.
+
+#### Snapshot integration with backup
+
+Each backup creates a consistent SQLite/configuration snapshot after recording its results. Store the same generation under `.media-archive` on connected registered writable archives outside data and audit roots. Keep five validated generations per disk and rotate after a new valid generation exists. Snapshot failure makes the backup result incomplete.
 
 ## 8. Required failure checks and limits
 

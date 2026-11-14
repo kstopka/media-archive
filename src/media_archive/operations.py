@@ -8,6 +8,7 @@ from media_archive.config import Configuration
 from media_archive.state import StateError, migrate_database, open_database, schema_version
 from media_archive.state.journal import load_attempts, load_operation, load_unfinished, recommended_recovery
 from media_archive.state.migrations import _head_revision
+from media_archive.state.reconciliation import load_reconciliation
 from media_archive.state.registry import initialize_database, validate_registered_configuration
 
 
@@ -104,6 +105,8 @@ def pending(config: Configuration, operation_id: int | None = None) -> dict[str,
         if schema_version(connection) in ("0001", "0002", "0003"):
             raise StateError("Podgląd operacji wymaga jawnej migracji bazy.")
         operations = load_unfinished(connection) if operation_id is None else (load_operation(connection, operation_id),)
+        reconciliation_required = load_reconciliation(connection) is not None
+        reconcile_first = "Przed wznowieniem uzgodnij przywrócony stan z nośnikami."
         result = []
         for operation in operations:
             attempts = load_attempts(connection, operation.id)
@@ -117,7 +120,9 @@ def pending(config: Configuration, operation_id: int | None = None) -> dict[str,
             }
             if operation_id is not None:
                 recovery = recommended_recovery(last)
-                if recovery == "restart":
+                if reconciliation_required:
+                    step = reconcile_first
+                elif recovery == "restart":
                     step = 'Po uzyskaniu blokad jawnie przejmij próbę w trybie recovery="restart" i wznów transfer.'
                 elif recovery == "reconcile":
                     step = 'Po uzyskaniu blokad uruchom odzyskiwanie w trybie recovery="reconcile" i sprawdź plik docelowy.'
@@ -125,4 +130,7 @@ def pending(config: Configuration, operation_id: int | None = None) -> dict[str,
                     step = "Uzyskaj blokady i rozpocznij próbę transferu."
                 item["następny_krok"] = step
             result.append(item)
-        return {"Niedokończone operacje": result}
+        details: dict[str, object] = {"Niedokończone operacje": result}
+        if reconciliation_required and operation_id is None:
+            details["Odzyskiwanie"] = reconcile_first
+        return details

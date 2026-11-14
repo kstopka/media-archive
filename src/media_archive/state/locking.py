@@ -15,6 +15,7 @@ from uuid import uuid4
 from media_archive._encoding import require_utf8
 from media_archive.config import Configuration
 
+from ._installation import OperationBusy, installation_lock
 from .database import _database_path
 from .errors import StateError
 
@@ -48,10 +49,6 @@ def collection_resource(config: Configuration, collection_id: str) -> Resource:
     while collection.parent_id is not None:
         collection = config.collection(collection.parent_id)
     return Resource("collection", str(canonical_path(collection.local_root)))
-
-
-class OperationBusy(StateError):
-    """A conflicting process currently holds a required resource."""
 
 
 @dataclass(frozen=True, eq=False)
@@ -112,7 +109,7 @@ def lock_resources(
                 raise StateError("Blokada zbioru wymaga kanonicznej ścieżki.")
             for parent in root.parents:
                 modes.setdefault((resource.kind, str(parent)), LOCK_SH)
-    with ExitStack() as stack:
+    with installation_lock(canonical), ExitStack() as stack:
         for (kind, resource_id), mode in sorted(modes.items()):
             key = f"{canonical.name}\0{kind}\0{resource_id}"
             digest = sha256(key.encode("utf-8")).hexdigest()

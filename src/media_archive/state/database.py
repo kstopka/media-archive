@@ -16,6 +16,7 @@ from sqlalchemy.pool import ConnectionPoolEntry, NullPool
 
 from media_archive._encoding import require_utf8
 
+from ._installation import installation_lock
 from .errors import DatabasePublishedError, StateError
 from .migrations import APPLICATION_ID, _head_revision, _upgrade, schema_version
 
@@ -219,7 +220,8 @@ def open_database(
     path: str | Path, *, writable: bool = False,
 ) -> Generator[Connection, None, None]:
     """Open existing state without creating it or migrating its schema."""
-    with _connect(_database_path(path), writable=writable) as connection:
+    database = _database_path(path)
+    with installation_lock(database), _connect(database, writable=writable) as connection:
         check = connection.begin()
         try:
             version = _validate(connection)
@@ -241,7 +243,9 @@ def create_database(path: str | Path, *, initialize: Callable[[Connection], None
     """
     destination = _database_path(path)
     try:
-        with tempfile.TemporaryDirectory(prefix=".media-archive-init-", dir=destination.parent) as directory:
+        with installation_lock(destination), tempfile.TemporaryDirectory(
+            prefix=".media-archive-init-", dir=destination.parent,
+        ) as directory:
             temporary = Path(directory) / "state.sqlite3"
             temporary.touch(mode=0o600, exist_ok=False)
             with _connect(temporary, writable=True, migrating=True, initializing=True) as connection:
@@ -257,11 +261,7 @@ def create_database(path: str | Path, *, initialize: Callable[[Connection], None
             _check_sidecars(destination, allow_journal=False)
             os.link(temporary, destination)
             try:
-                directory_fd = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY)
-                try:
-                    os.fsync(directory_fd)
-                finally:
-                    os.close(directory_fd)
+                _sync_directory(destination.parent)
             except OSError:
                 raise DatabasePublishedError(
                     "Baza jest pod docelową nazwą, ale trwałość zapisu nie została potwierdzona. "
@@ -273,10 +273,19 @@ def create_database(path: str | Path, *, initialize: Callable[[Connection], None
 
 def migrate_database(path: str | Path) -> str:
     """Explicitly apply all pending migrations atomically and return the revision."""
-    with _connect(_database_path(path), writable=True, migrating=True) as connection:
+    database = _database_path(path)
+    with installation_lock(database), _connect(database, writable=True, migrating=True) as connection:
         with transaction(connection):
             # Recheck after acquiring the write lock, including on concurrent calls.
             _validate(connection)
             _upgrade(connection)
             _check_write_access(connection)
             return _validate(connection)
+
+
+def _sync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)

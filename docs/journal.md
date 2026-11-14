@@ -12,7 +12,7 @@ Use `media_archive.state.locking.lock_resources(database, resources)` around the
 
 The workflow supplies the full set of resources it touches. For example, backup needs the source collection root and destination archive group. Planning validates the registered configuration in the same SQLite transaction and checks that a local destination has its root collection lock and an archive destination has its group lock. Operators using the same working database must cooperate through these locks.
 
-Linux `flock` holds locks on persistent files beside the canonical database path. The database and its directory must be under application control on a local filesystem. Keep the lock files in place. The lock ends when the owning context closes its descriptors or the process exits. Workers must not retain inherited lock descriptors. Time elapsed and PID records do not grant ownership. Separate installations use separate locks.
+Linux `flock` holds locks on persistent files beside the canonical database path. The database and its directory must be under application control on a local filesystem. Keep the lock files in place. The lock ends when the owning context closes its descriptors or the process exits. Workers must not retain inherited lock descriptors. Time elapsed and PID records do not grant ownership. Separate installations use separate locks. A shared installation lock remains held for the duration of the resource locks. Restore needs exclusive access to the same installation. See [state snapshots](snapshots.md).
 
 ## Journal API
 

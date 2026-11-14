@@ -44,7 +44,7 @@ Creation is separate from migration. Opening a missing database fails. A known o
 
 [migrations.py](../src/media_archive/state/migrations.py) runs the packaged [Alembic revisions](../src/media_archive/state/revisions/versions/) on the application's existing connection. Add schema changes as a new Alembic revision whose `down_revision` points to the current head. Preserve applied revision files and keep one head.
 
-The current revision is `0004`, which adds the operation journal to the registry and history schema. `main.alembic_version` stores one applied revision. Both Alembic and the state API read the revision from `main`, so a temporary table with the same name cannot change which revision gets recorded or validated. SQLite header `application_id` is `0x4D415243` (`MARC`).
+The current revision is `0005`, which adds the persistent reconciliation requirement after restore. `main.alembic_version` stores one applied revision. Both Alembic and the state API read the revision from `main`, so a temporary table with the same name cannot change which revision gets recorded or validated. SQLite header `application_id` is `0x4D415243` (`MARC`).
 
 The Alembic environment runs in a caller-owned transaction with transactional DDL. Use Alembic operations or SQL on `op.get_bind()`. The SQLite authorizer blocks transaction-control statements, database attachment and changes to connection settings during revisions. This keeps schema changes and Alembic's revision update in the same transaction. A failed revision rolls back the entire pending batch. [Alembic's shared connection recipe](https://alembic.sqlalchemy.org/en/latest/cookbook.html#sharing-a-connection-across-one-or-more-programmatic-migration-commands)
 
@@ -76,7 +76,7 @@ Filesystem and SQLite failures become `StateError` without forwarding their unde
 
 [test_state_database.py](../tests/test_state_database.py) uses temporary directories and synthetic data. It covers creation and concurrent creators, sidecar collisions, read-only fallback, journal permissions, invalid databases and revisions, writers opened before a migration, preservation of dependent rows during a batch rebuild, temporary-table shadowing, constraint failures, automatic rollback, unsupported autocommit, failed commits, migration rollback/retry and concurrent migration calls. The interruption tests verify that Media Archive recovers its own database and preserves the exact bytes of a foreign database and its hot journal. CLI checks verify that help and configuration validation never connect to SQLite.
 
-This foundation provides schema migration transactions. The journal coordinates long-running locks. File transfers, physical-device validation, snapshots and restore are delivered in their respective later tasks. Tests on temporary state establish the exercised software behavior. They do not establish power-loss guarantees for a particular production filesystem or hardware.
+The journal coordinates long-running locks. Access to the database uses a shared lock on its parent directory. [Restore](snapshots.md) takes an exclusive lock on that directory while replacing state. File transfers and physical-device validation belong to later tasks. Tests on temporary state establish the exercised software behavior. They do not establish power-loss guarantees for a particular production filesystem or hardware.
 
 ## First setup and upgrades
 

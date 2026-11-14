@@ -17,6 +17,7 @@ from . import _history_tables as history, _registry_tables as registry
 from ._history_queries import find, insert_id, require_row, require_write_transaction
 from .errors import StateError
 from .locking import OperationLocks, Resource, canonical_path, collection_resource, require_locks
+from .reconciliation import require_reconciled
 from .registry import _validate_registered_configuration
 
 operations = table("journal_operations", column("id"), column("operation_key"), column("intent"),
@@ -95,6 +96,7 @@ def plan_operation(
 ) -> int:
     """Record one immutable intent. Reusing its stable key requires the same plan."""
     require_write_transaction(connection)
+    require_reconciled(connection)
     require_utf8(operation_key, StateError)
     require_utf8(intent, StateError)
     requested = frozenset(required_resources)
@@ -167,6 +169,7 @@ def start_attempt(
 ) -> int:
     """Start work or explicitly take over an unfinished attempt under the same locks."""
     require_write_transaction(connection)
+    require_reconciled(connection)
     if recovery not in (None, "restart", "reconcile"):
         raise StateError("Nieznany tryb odzyskiwania próby.")
     require_utf8(run_id, StateError)

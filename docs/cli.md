@@ -9,10 +9,15 @@ Use `media-archive` or `python -m media_archive`. Put `--config FILE` before the
 | `setup --dry-run` | Show the database path and registration counts. For an existing database, open it read-only and compare the registry if the schema is current. An older schema is reported as requiring explicit migration. |
 | `setup --yes` | Confirm first setup. Create `APP_STATE_DIR` if needed, build the current schema and initial registry in a temporary database, then publish `state.sqlite3` without replacing any existing file. |
 | `migrate [--dry-run]` | Upgrade an existing database explicitly or show its current and target revisions without upgrading it. |
+| `snapshot DIRECTORY` | Create a validated state generation in an existing directory. |
+| `verify-snapshot GENERATION` | Validate a generation independently of the working configuration. |
+| `--config FILE restore GENERATION --yes` | Restore working state in an existing `APP_STATE_DIR` using the selected configuration. |
 | `pending` | List unfinished journal operations and their latest attempt states. A listed operation may still have a live owner. |
 | `resume ID --dry-run` | Show the next step for an unfinished operation using its numeric operation ID. Actual file recovery will be available with the transfer workflow. Until then, `resume ID` returns status 1. |
 
 All commands that need existing state report a missing database as an error. Setup and migration use the [SQLite lifecycle](state.md#first-setup-and-upgrades). The configuration wizard is a separate planned feature. Media operations will use the [journal](journal.md) and [history](history.md).
+
+The [snapshot reference](snapshots.md) covers generation contents, filesystem effects and the reconciliation requirement.
 
 The recovery preview distinguishes a new attempt from an explicit takeover of an unfinished attempt. A takeover requires acquiring the operation's locks first. The preview reports the suggested action from the journal state.
 
@@ -31,7 +36,7 @@ Rotation checks the Media Archive format marker and requires the invocation ID a
 | 0 | Success or completed preview |
 | 1 | Execution error |
 | 2 | Invalid arguments or configuration |
-| 3 | Partial result. A published database could not be confirmed durable, or the state change succeeded and report writing failed. |
+| 3 | Partial result. A published database or snapshot could not be confirmed durable, or the state change succeeded and report writing failed. |
 | 130 | Interrupted by the operator |
 
 If directory synchronization fails after setup publishes the database, the command returns and reports code 3. Use `setup --dry-run` to check the existing database and registry. A subsequent `setup --yes` refuses to replace the published file.
