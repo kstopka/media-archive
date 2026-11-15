@@ -1,8 +1,9 @@
 """Read-only adapters for mounted Linux volumes and registered ADB phones."""
 
-from collections.abc import Generator, Iterator
+from collections.abc import Callable, Generator, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from hashlib import sha256
 import os
 from pathlib import Path
 import select
@@ -30,16 +31,29 @@ done
 """
 _ENTER = _ENTER_ROOT + "shift\n" + _TRAVERSE
 _ENTER_PARENT = _ENTER_ROOT + "name=$2\nshift 2\n" + _TRAVERSE
-_STAT = 'stat -c "%f %s %Y" "./$name"'
-_READ = '[ ! -L "./$name" ] && [ -f "./$name" ] || exit 1\nexec cat "./$name"'
-_LIST = r"""
+_STAT_FORMAT = "%f %s %Y %Z %d %i"
+_STAT = f'stat -c "{_STAT_FORMAT}" "./$name"'
+_READ = _ENTER_ROOT + "name=$2\nexpected=$3\nshift 3\n" + _TRAVERSE + f"""
+[ ! -L "./$name" ] && [ -f "./$name" ] || exit 1
+exec 3<"./$name" || exit 1
+[ -f /proc/self/fd/0 ] <&3 || exit 1
+verify_open_file() {{
+    [ -z "$expected" ] || {{
+        actual=$(stat -L -c "{_STAT_FORMAT}" /proc/self/fd/0 <&3) && [ "$actual" = "$expected" ]
+    }}
+}}
+verify_open_file || exit 1
+cat <&3 || exit 1
+verify_open_file
+"""
+_LIST = rf"""
 [ -r . ] && [ -x . ] || exit 1
 find . -mindepth 1 -maxdepth 1 -exec sh -c '
     for item; do
-        data=$(stat -c "%f %s %Y" "$item") || exit 1
+        data=$(stat -c "{_STAT_FORMAT}" "$item") || exit 1
         printf "%s\000%s\000" "$item" "$data" || exit 1
     done
-' sh {} +
+' sh {{}} +
 """
 
 
@@ -51,10 +65,13 @@ class SourceEntry:
     mode: int
     size: int
     modified_ns: int
+    changed_ns: int
+    device: int
+    inode: int
 
     @classmethod
     def from_stat(cls, path: Path, info: os.stat_result) -> "SourceEntry":
-        return cls(path, info.st_mode, info.st_size, info.st_mtime_ns)
+        return cls(path, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_dev, info.st_ino)
 
 
 @dataclass(frozen=True)
@@ -103,9 +120,22 @@ class LocalSource:
             return SourceEntry.from_stat(path, os.fstat(descriptor))
 
     @contextmanager
-    def read_chunks(self, path: Path) -> Generator[Iterator[bytes], None, None]:
+    def read_chunks(self, path: Path, *, expected: SourceEntry | None = None) -> Generator[Iterator[bytes], None, None]:
         with open_media_file(self._volume, _relative(path), scope=self._scope) as source:
+            if expected is not None:
+                _check_open_file(path, source, expected)
             yield _read_local(source)
+            if expected is not None:
+                _check_open_file(path, source, expected)
+
+
+def _check_open_file(path: Path, source: BinaryIO, expected: SourceEntry) -> None:
+    try:
+        observed = SourceEntry.from_stat(path, os.fstat(source.fileno()))
+    except OSError:
+        raise StateError("Nie można sprawdzić atrybutów otwartego pliku.") from None
+    if observed != expected:
+        raise StateError("Plik źródłowy zmienił się podczas odczytu.")
 
 
 def _read_local(source: BinaryIO) -> Iterator[bytes]:
@@ -166,11 +196,12 @@ def _require_phone(serial: str) -> None:
 
 def _remote_attributes(path: Path, data: bytes) -> SourceEntry:
     try:
-        mode, size, seconds = data.split()
+        mode, size, modified, changed, device, inode = data.split()
         length = int(size)
         if length < 0:
             raise ValueError
-        return SourceEntry(path, int(mode, 16), length, int(seconds) * 1_000_000_000)
+        return SourceEntry(path, int(mode, 16), length, int(modified) * 1_000_000_000,
+                           int(changed) * 1_000_000_000, int(device), int(inode))
     except ValueError:
         raise StateError("ADB zwróciło nieprawidłowe atrybuty pliku.") from None
 
@@ -213,9 +244,13 @@ class AdbSource:
         return _remote_attributes(path, _adb(command, reject_stderr=True))
 
     @contextmanager
-    def read_chunks(self, path: Path) -> Generator[Iterator[bytes], None, None]:
+    def read_chunks(self, path: Path, *, expected: SourceEntry | None = None) -> Generator[Iterator[bytes], None, None]:
         path = _relative(path)
-        command = self._shell(_ENTER_PARENT + _READ, path.name or ".", *path.parent.parts)
+        metadata = ""
+        if expected is not None:
+            metadata = (f"{expected.mode:x} {expected.size} {expected.modified_ns // 1_000_000_000} "
+                        f"{expected.changed_ns // 1_000_000_000} {expected.device} {expected.inode}")
+        command = self._shell(_READ, path.name or ".", metadata, *path.parent.parts)
         try:
             process = subprocess.Popen(["adb", *command], stdin=subprocess.DEVNULL,
                                        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
@@ -245,6 +280,54 @@ def _read_remote(process: subprocess.Popen[bytes]) -> Iterator[bytes]:
     except (OSError, subprocess.TimeoutExpired):
         raise StateError("Nie można ukończyć odczytu pliku przez ADB.") from None
     raise StateError("Przekroczono czas oczekiwania na dane z ADB.")
+
+
+@dataclass(frozen=True)
+class SourceDigest:
+    sha256: str
+    size: int
+
+
+class ReadCancelled(StateError):
+    """The caller cancelled the read before a digest was accepted."""
+
+
+def _check_cancelled(cancelled: Callable[[], bool] | None) -> None:
+    if cancelled is not None and cancelled():
+        raise ReadCancelled("Anulowano odczyt pliku.")
+
+
+def hash_source_file(source: LocalSource | AdbSource, path: Path, *,
+                     progress: Callable[[int, int], None] | None = None,
+                     cancelled: Callable[[], bool] | None = None) -> SourceDigest:
+    """Return SHA-256 and byte count after a complete read and matching attributes."""
+    _check_cancelled(cancelled)
+    before = source.attributes(path)
+    if not stat.S_ISREG(before.mode):
+        raise StateError("Haszowanie wymaga zwykłego pliku źródłowego.")
+    if progress is not None:
+        progress(0, before.size)
+    _check_cancelled(cancelled)
+
+    digest = sha256()
+    size = 0
+    with source.read_chunks(path, expected=before) as chunks:
+        for chunk in chunks:
+            size += len(chunk)
+            if size > before.size:
+                raise StateError("Odczytana liczba bajtów nie zgadza się z rozmiarem pliku.")
+            digest.update(chunk)
+            if progress is not None:
+                progress(size, before.size)
+            _check_cancelled(cancelled)
+
+    _check_cancelled(cancelled)
+    if size != before.size:
+        raise StateError("Odczytana liczba bajtów nie zgadza się z rozmiarem pliku.")
+    if source.attributes(path) != before:
+        raise StateError("Plik źródłowy zmienił się podczas odczytu.")
+    _check_cancelled(cancelled)
+    return SourceDigest(digest.hexdigest(), size)
 
 
 @contextmanager

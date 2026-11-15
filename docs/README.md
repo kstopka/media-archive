@@ -14,7 +14,7 @@ Current coverage includes the package and CLI skeleton, configuration, SQLite li
 | [state.md](state.md) | Explicit SQLite creation/opening, transactions, migration API, errors and limits |
 | [registration.md](registration.md) | Persistent identities, registered destinations, device changes and approval API |
 | [devices.md](devices.md) | Linux mount checks, safe file paths and explicit device changes |
-| [sources.md](sources.md) | Read-only local and ADB adapters for listing, attributes and byte streams |
+| [sources.md](sources.md) | Read-only local and ADB adapters, streaming SHA-256 and read stability checks |
 | [history.md](history.md) | Media occurrences, evidence, archive requirements and initialization |
 | [journal.md](journal.md) | Operation attempts, resource locks and recovery |
 | [cli.md](cli.md) | Setup, migrations, planning, journal previews and report retention |

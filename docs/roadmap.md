@@ -33,7 +33,7 @@ This stage provides inventory primitives, not media transfers.
 
 - [x] **2.1 Device identity and safe paths.** System-mounted volume checks, roles, UUIDs, available hardware evidence, safe opens and explicit binding changes. Synthetic verification is complete; real-device trials remain separate. See [Linux volume identification](devices.md).
 - [x] **2.2 Local and ADB source adapters.** Read-only directory listings, attributes and byte streams with explicit capabilities and serial-based ADB selection. Synthetic tests cover authorization, disconnects and literal filenames. See [read-only sources](sources.md).
-- [ ] **2.3 SHA-256 and stable reads.** Streaming hashes, progress, cancellation and read-stability checks. Changed sources, failures and interruptions must invalidate evidence; new transfers/full audits cannot rely solely on metadata.
+- [x] **2.3 SHA-256 and stable reads.** Stream local and ADB files with progress and cancellation. Return SHA-256 only after a complete read with matching byte count and attributes. See [source hashing](sources.md#hash-a-source-file).
 
 ## Stage 3 — First operational feature: AUDIT and initialization
 

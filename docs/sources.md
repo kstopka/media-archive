@@ -21,14 +21,22 @@ Both adapters expose the same methods:
 | Method | Result |
 | --- | --- |
 | `list_directory(path=Path("."))` | Immediate entries, sorted by their relative paths. An empty tuple means the directory was read successfully and contained no entries. |
-| `attributes(path)` | A `SourceEntry` containing the relative path, POSIX mode, size in bytes and modification time in nanoseconds. |
+| `attributes(path)` | A `SourceEntry` containing the relative path, POSIX mode, size in bytes, modification and status-change times in nanoseconds, and filesystem device and inode numbers. |
 | `read_chunks(path)` | A context manager exposing an iterator of bytes for a regular file. Iterate to EOF to complete the read and check the ADB exit status. Leaving early closes the stream. |
-| `capabilities` | Reported timestamp resolution and availability of source hashing and byte-offset resume. |
+| `capabilities` | Reported timestamp resolution and availability of hashing on the source device and byte-offset resume. |
 
 Paths are relative to the configured source root. Names must be UTF-8 and may contain spaces, quotes, shell characters and newlines. Symlinks and other special entries can appear in listings and attributes. Only regular files can be read, and directory traversal below the root rejects symlinks. The local adapter also rejects crossing into a different mount. The ADB launch may start the local `adb` server. An Android system alias such as `/sdcard` can be part of the configured root.
 
-ADB reports modification times to the second. The local adapter exposes nanosecond timestamps from the filesystem, whose actual resolution can be coarser. A directory listing and a subsequent read are separate observations. The ADB adapter checks path components on Android using its shell and cannot make those checks atomic with a concurrent rename on the phone. Source hashing, checks for changes during a read and byte-offset resume are outside these adapters.
+ADB reports timestamps to the second. The local adapter exposes nanosecond timestamps from the filesystem, whose actual resolution can be coarser. A directory listing and a subsequent read are separate observations. The ADB adapter checks path components on Android using its shell and cannot make those checks atomic with a concurrent rename on the phone.
 
 A disabled or mismatched profile raises `ConfigError`. An unavailable source, authorization failure, unsafe path, malformed listing or interrupted read raises `StateError`. ADB metadata calls and idle reads have a 30-second timeout. Error messages omit private device identifiers and paths. A stream can yield bytes before a later ADB failure, so consumers must treat the read as complete only after successful exhaustion.
 
-[Source tests](../tests/test_sources.py) use temporary files and an ADB stand-in that runs the actual generated shell command locally. They cover source boundaries, quoted and non-UTF-8 names, device selection and authorization, empty listings, binary reads, disconnection and reads with more than 1,024 file descriptors in use. A physical Android phone was not used in these tests.
+## Hash a source file
+
+Call `hash_source_file(source, path, *, progress=None, cancelled=None)` from `media_archive.sources` while the source is open. It returns `SourceDigest(sha256, size)` after reading the whole file with `hashlib.sha256`, reaching a successful end of stream and matching its byte count and attributes. The comparison checks mode, size, timestamps and filesystem identity before and after the read. Both adapters also compare the opened file's attributes with the initial observation before and after streaming bytes from the same descriptor. The ADB shell uses `/proc/self/fd/0` with the opened file attached to standard input. The adapters calculate the digest on the host, using streamed bytes.
+
+`progress(bytes_read, total_bytes)` receives zero at the start and the cumulative count after each chunk. A count at 100% can precede a final stream or attribute error. A `cancelled()` callback returning `True` raises `ReadCancelled` at the next checkpoint. Checkpoints run before I/O, between chunks and before returning the digest. A blocked I/O call must return before a callback can be checked. An error or cancellation yields no digest. This function does not write evidence to SQLite. Audit and import workflows decide when to record it.
+
+Attribute checks detect observed changes. An in-place edit on Android can still go undetected if the size and timestamps reported at one-second precision remain the same. A digest describes the bytes actually received during that read.
+
+[Source tests](../tests/test_sources.py) use temporary files and an ADB stand-in that runs the actual generated shell command locally. They cover source boundaries, quoted and non-UTF-8 names, device selection and authorization, empty listings, disconnection and reads with more than 1,024 file descriptors in use. They also verify digests, progress, cancellation, incomplete streams and source replacement. A physical Android phone was not used in these tests.
