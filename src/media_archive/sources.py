@@ -94,6 +94,10 @@ class LocalSource:
     _scope: Path | None
     capabilities = SourceCapabilities(modification_time_resolution_ns=1)
 
+    @property
+    def physical_device(self) -> str:
+        return self._volume.physical_device
+
     def list_directory(self, path: Path = Path(".")) -> tuple[SourceEntry, ...]:
         path = _relative(path)
         with _media_descriptor(self._volume, path, self._scope) as descriptor:

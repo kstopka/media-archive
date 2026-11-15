@@ -37,7 +37,7 @@ This stage provides inventory primitives, not media transfers.
 
 ## Stage 3 — First operational feature: AUDIT and initialization
 
-- [ ] **3.1 Quick inventories and comparison.** Scan complete registered archive roots, recording paths, types, sizes, errors and incompleteness. Attribute agreement must never be reported as verified content agreement.
+- [x] **3.1 Quick inventories and comparison.** Compare two selected registered archive roots by paths, types and sizes, report differences and incomplete scopes, and record presence observations. See [quick audit](audit.md).
 - [ ] **3.2 Full resumable AUDIT.** Hash contents with checkpoints, progress and sequential disk attachment. Revalidate changed files after resuming; report exactly which scope was verified.
 - [ ] **3.2a Explicit copy repair.** Deliver after the shared verified-transfer mechanism in 4.1. Present a verified source and exact destination for approval, including recovery from a surviving archive copy after local removal. See [repair design](design/archive-workflows.md#explicit-copy-repair).
 - [ ] **3.3 Initial existing-data inventory.** Record local collections and all required archives, preserving progress while disks are offline. Existing files are observations, not fabricated successful imports. No automatic reorganization of existing collections.

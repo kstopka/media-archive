@@ -1,6 +1,6 @@
 # Archive workflows and state — planned design
 
-**Design reference.** This document records requirements for future media operations. The current [configuration](../configuration.md), [SQLite lifecycle](../state.md) and [persistent registration](../registration.md) have separate implementation references. The [history API](../history.md) stores media evidence and initialization progress. The [journal API](../journal.md) records attempts and coordinates locks. Linux mount checks and explicit volume changes are available through the [device API](../devices.md). The [source adapters](../sources.md) provide read-only local and ADB access. Transfers, audits and workflow recovery remain planned.
+**Design reference.** This document records requirements for future media operations. The current [configuration](../configuration.md), [SQLite lifecycle](../state.md) and [persistent registration](../registration.md) have separate implementation references. The [history API](../history.md) stores media evidence and initialization progress. The [journal API](../journal.md) records attempts and coordinates locks. Linux mount checks and explicit volume changes are available through the [device API](../devices.md). The [source adapters](../sources.md) provide read-only local and ADB access. [Quick audit](../audit.md) compares archive metadata. Transfers, full audit and workflow recovery remain planned.
 
 The [roadmap](../roadmap.md) defines delivery order. Requirements below describe intended behavior; proposed module/table names and protocols remain implementation designs, not existing APIs. Examples are neutral and do not describe a particular installation.
 
@@ -194,7 +194,7 @@ Detailed SQL tables, indexes and internal state APIs are implementation decision
 
 ## 7. Audit, reporting and recovery
 
-AUDIT reads complete configured archive roots, including existing content outside currently assigned backup collections. Quick mode compares paths/types/sizes; full mode independently hashes file occurrences. Report only-on-one-side entries, content differences, naming conflicts, read errors and incomplete scopes. Resuming must invalidate evidence for changed files; an inventory is not an atomic snapshot.
+AUDIT reads complete configured archive roots, including existing content outside currently assigned backup collections. The implemented [quick mode](../audit.md) compares paths, types and sizes. The planned full mode independently hashes file occurrences and invalidates evidence for changed files when resuming. An inventory is not an atomic snapshot.
 
 ### Explicit copy repair
 

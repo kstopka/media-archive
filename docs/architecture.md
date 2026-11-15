@@ -49,6 +49,7 @@ Paths below are relative to the repository root.
 | [config/errors.py](../src/media_archive/config/errors.py) | `ConfigError`, a `ValueError` subclass with safe CLI messages |
 | [devices.py](../src/media_archive/devices.py) | Verify Linux mounts and block-device evidence; open files within a verified scope |
 | [sources.py](../src/media_archive/sources.py) | List local and ADB sources, inspect attributes and stream regular files |
+| [audit.py](../src/media_archive/audit.py) | Scan and compare two registered archive roots and record presence observations |
 | [state/database.py](../src/media_archive/state/database.py) | Explicit creation/opening, connection lifetime, short transactions and migration entry point |
 | [state/migrations.py](../src/media_archive/state/migrations.py) | Application identity, Alembic revision validation and migration entry point |
 | [state/registry.py](../src/media_archive/state/registry.py) | Trusted identity reads, configuration checks and explicit registration |
@@ -59,7 +60,7 @@ Paths below are relative to the repository root.
 
 Both `python -m media_archive` and the installed `media-archive` script reach `media_archive.cli.main(argv=None)`.
 
-The [CLI reference](cli.md) describes setup, migrations, device checks and registration, read-only journal previews, report storage and exit statuses. Command handlers reuse the configuration loader, state registry and operation journal. Media execution remains in the planned workflow layer.
+The [CLI reference](cli.md) describes setup, migrations, device checks and registration, quick audit, read-only journal previews, report storage and exit statuses. Command handlers reuse the configuration loader, state registry and operation journal. Quick audit reads only filesystem metadata. Media transfers remain planned.
 
 ## Configuration execution
 

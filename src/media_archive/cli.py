@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 
 from media_archive import operations
+from media_archive.audit import quick_audit
 from media_archive.config import ConfigError, load_config
 from media_archive.reports import Report, write_report
 from media_archive.state import DatabasePublishedError, DeviceKey, StateError
@@ -37,7 +38,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="media-archive",
         description="Lokalne narzędzie do importu, porządkowania i archiwizacji mediów.",
-        epilog="IMPORT, SORT, BACKUP i AUDIT nie są jeszcze zaimplementowane.",
+        epilog="Dostępny jest szybki AUDIT. IMPORT, SORT i BACKUP nie są jeszcze zaimplementowane.",
     )
     parser.add_argument("--config", metavar="PLIK", help="plik konfiguracji (domyślnie .env)")
     parser.add_argument("--check-config", action="store_true", help="sprawdź sam plik konfiguracji")
@@ -55,6 +56,10 @@ def _parser() -> argparse.ArgumentParser:
     restore = commands.add_parser("restore", help="przywróć bazę z generacji")
     restore.add_argument("generation", type=Path, metavar="GENERACJA")
     restore.add_argument("--yes", action="store_true", help="potwierdź przywrócenie bazy")
+    audit = commands.add_parser("audit", help="porównaj ścieżki, typy i rozmiary na dwóch nośnikach")
+    audit.add_argument("--group", required=True, metavar="GRUPA")
+    audit.add_argument("--targets", required=True, nargs=2, metavar=("PIERWSZY", "DRUGI"))
+    audit.add_argument("--mode", choices=("quick",), default="quick")
     device = commands.add_parser("device", help="sprawdź lub jawnie zarejestruj wolumin")
     actions = device.add_subparsers(dest="device_action", required=True)
     for action, help_text in (
@@ -66,7 +71,7 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--to", type=Path, metavar="KATALOG", required=action in ("replace", "reformat"))
         if action != "check":
             command.add_argument("--yes", action="store_true", help="zapisz sprawdzoną zmianę w rejestrze")
-    for command in (setup, migrate, resume):
+    for command in (setup, migrate, resume, audit):
         command.add_argument("--dry-run", action="store_true", help="pokaż plan bez zapisu stanu")
         command.add_argument("--report", action="store_true", help="zapisz raport tekstowy i JSON")
     return parser
@@ -102,13 +107,14 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     dry_run = getattr(args, "dry_run", False)
     if args.command == "device":
         dry_run = args.device_action != "check" and not getattr(args, "yes", False)
-    save_report = getattr(args, "report", False) or (args.command in ("setup", "migrate") and not dry_run)
+    save_report = getattr(args, "report", False) or (args.command in ("setup", "migrate", "audit") and not dry_run)
     try:
         operations.check_application_paths(config, reports=save_report, device_mount=getattr(args, "to", None))
     except StateError as error:
         print(f"Błąd wykonania: {error}", file=sys.stderr)
         return 1
     try:
+        code = 0
         if args.command == "setup":
             details = operations.setup(config, dry_run=dry_run)
             message = "Plan konfiguracji początkowej." if dry_run else "Baza i początkowy rejestr są gotowe."
@@ -133,6 +139,9 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                 message = "Plan zmiany rejestru. Powtórz z --yes, aby zatwierdzić."
             else:
                 message = "Zapisano zatwierdzoną zmianę rejestru."
+        elif args.command == "audit":
+            outcome = quick_audit(config, args.group, *args.targets, dry_run=dry_run)
+            code, message, details = outcome.code, outcome.message, outcome.details
         else:
             if args.command == "resume" and not dry_run:
                 raise StateError("Wznowienie transferu będzie dostępne po wdrożeniu operacji na plikach. "
@@ -141,7 +150,7 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             message = "Plan wznowienia." if dry_run else "Podgląd niedokończonych operacji."
             if not details["Niedokończone operacje"]:
                 message = "Brak niedokończonych operacji."
-        report = Report(args.command, 0, message, dry_run, details)
+        report = Report(args.command, code, message, dry_run, details)
     except ConfigError as error:
         report = Report(args.command, 2, f"Błąd konfiguracji: {error}", dry_run)
     except KeyboardInterrupt:
@@ -151,13 +160,14 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     except StateError as error:
         report = Report(args.command, 1, f"Błąd wykonania: {error}", dry_run)
 
-    print(report.render(), end="", file=sys.stderr if report.code else sys.stdout)
+    print(report.render(summary_only=args.command == "audit" and save_report), end="",
+          file=sys.stderr if report.code else sys.stdout)
     if save_report:
         try:
             destination = write_report(config.app.reports_dir, report, config.app.report_keep_runs)
         except StateError as error:
             print(str(error), file=sys.stderr)
-            if report.code == 0:
+            if report.code in (0, 4):
                 return 1 if dry_run else 3
         else:
             print(f"Raport · {destination.name}")

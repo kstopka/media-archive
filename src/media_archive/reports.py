@@ -18,7 +18,7 @@ _RUN_NAME = re.compile(r"run-([0-9]{8}T[0-9]{12}Z)-([0-9a-f]{32})")
 _REPORT_FORMAT = "media-archive/report-v1"
 _STAMP_FORMAT = "%Y%m%dT%H%M%S%fZ"
 _STATUS_LABELS = {0: "Sukces", 1: "Błąd wykonania", 2: "Błąd konfiguracji",
-                  3: "Wynik częściowy", 130: "Przerwano"}
+                  3: "Wynik częściowy", 4: "Audyt wykrył różnice", 130: "Przerwano"}
 
 
 @dataclass(frozen=True)
@@ -31,7 +31,7 @@ class Report:
     invocation_id: str = field(default_factory=lambda: uuid4().hex)
     finished_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
-    def render(self) -> str:
+    def render(self, *, summary_only: bool = False) -> str:
         lines = [self.message]
         for key, value in self.details.items():
             if key == "Niedokończone operacje":
@@ -39,6 +39,10 @@ class Report:
                     lines.append(f"Operacja {item['id_operacji']} · {item['stan']} · uruchomienie {item['id_uruchomienia'] or '—'}")
                     if "następny_krok" in item:
                         lines.append(item["następny_krok"])
+            elif self.command == "audit" and key in ("Różnice", "Błędy skanowania", "Odczytane katalogi"):
+                if not summary_only and value:
+                    lines.append(key)
+                    lines.extend(f"- {item}" for item in value)
             else:
                 lines.append(f"{key} · {value}")
         return "\n".join(lines) + "\n"
@@ -96,7 +100,7 @@ def _is_completed_report(bundle: Path) -> bool:
             return False
         if payload.get("id_wywołania") != name[2] or payload.get("tryb_planowania") is not False:
             return False
-        if type(payload.get("kod")) is not int or payload["kod"] not in (0, 1, 2, 3):
+        if type(payload.get("kod")) is not int or payload["kod"] not in (0, 1, 2, 3, 4):
             return False
         finished_at = datetime.fromisoformat(payload["zakończono"])
         return finished_at.utcoffset() is not None and finished_at.astimezone(timezone.utc).strftime(_STAMP_FORMAT) == name[1]

@@ -14,6 +14,7 @@ Use `media-archive` or `python -m media_archive`. Put `--config FILE` before the
 | `--config FILE restore GENERATION --yes` | Restore working state in an existing `APP_STATE_DIR` using the selected configuration. |
 | `device check BINDING [--to DIRECTORY]` | Verify a mounted Linux volume for read access. |
 | `device register\|replace\|reformat BINDING [--to DIRECTORY] [--yes]` | Preview or explicitly register one verified volume binding change. See [device commands](devices.md#commands) for path requirements. |
+| `audit --group GROUP --targets FIRST SECOND [--mode quick] [--dry-run] [--report]` | Compare archive paths, types and regular-file sizes. See [quick audit](audit.md). |
 | `pending` | List unfinished journal operations and their latest attempt states. A listed operation may still have a live owner. |
 | `resume ID --dry-run` | Show the next step for an unfinished operation using its numeric operation ID. Actual file recovery will be available with the transfer workflow. Until then, `resume ID` returns status 1. |
 
@@ -25,7 +26,7 @@ The recovery preview distinguishes a new attempt from an explicit takeover of an
 
 ## Reports and exit status
 
-Setup and migration executions save one UTF-8 text/JSON pair per finished invocation after loading a valid configuration and checking output locations. Planning displays its result in the terminal. Add `--report` to a dry run to save the pair. A dry run makes no state, registration or media changes. If its report directory is under the state directory, producing that report may also create the parent directories.
+Setup, migration and audit executions save one UTF-8 text/JSON pair per finished invocation after loading a valid configuration and checking output locations. Planning displays its result in the terminal. Add `--report` to a dry run to save the pair. A dry run makes no state, registration or media changes. If its report directory is under the state directory, producing that report may also create the parent directories.
 
 State and report paths are checked against resolved collection roots, including collections reached through symbolic links. When a report is requested, the CLI rejects an existing non-directory or symbolic link at `APP_REPORTS_DIR` before setup or migration writes state.
 
@@ -38,7 +39,8 @@ Rotation checks the Media Archive format marker and requires the invocation ID a
 | 0 | Success or completed preview |
 | 1 | Execution error |
 | 2 | Invalid arguments or configuration |
-| 3 | Partial result. A published database or snapshot could not be confirmed durable, or the state change succeeded and report writing failed. |
+| 3 | Partial result. An audit scope was unreadable, audit observations could not be saved, a published database or snapshot could not be confirmed durable, or a completed execution could not save its report. |
+| 4 | Quick audit completed and detected differences in paths or attributes. |
 | 130 | Interrupted by the operator |
 
 If directory synchronization fails after setup publishes the database, the command returns and reports code 3. Use `setup --dry-run` to check the existing database and registry. A subsequent `setup --yes` refuses to replace the published file.

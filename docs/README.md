@@ -2,7 +2,7 @@
 
 This directory contains technical documentation for developers and AI agents. Start here before reading application source. The implementation reference describes **implemented behavior**; the roadmap and `design/` pages are explicitly marked plans. All pages are public: examples must contain synthetic paths and identifiers only.
 
-Current coverage includes the package and CLI skeleton, configuration, SQLite lifecycle, persistent registration and media history. Archive operations remain planned.
+Current coverage includes the package and CLI, configuration, SQLite lifecycle, persistent registration, media history and quick archive audit.
 
 ## Reading order
 
@@ -15,6 +15,7 @@ Current coverage includes the package and CLI skeleton, configuration, SQLite li
 | [registration.md](registration.md) | Persistent identities, registered destinations, device changes and approval API |
 | [devices.md](devices.md) | Linux mount checks, safe file paths and explicit device changes |
 | [sources.md](sources.md) | Read-only local and ADB adapters, streaming SHA-256 and read stability checks |
+| [audit.md](audit.md) | Quick comparisons, presence observations and incomplete scan reports |
 | [history.md](history.md) | Media occurrences, evidence, archive requirements and initialization |
 | [journal.md](journal.md) | Operation attempts, resource locks and recovery |
 | [cli.md](cli.md) | Setup, migrations, planning, journal previews and report retention |
@@ -63,7 +64,8 @@ These documents use neutral examples and do not depend on private planning notes
 | Media history and initialization | Python APIs for recording evidence, archive requirements and resumable progress |
 | Operation journal | Python API for durable attempts, recovery and process-held resource locks |
 | State snapshots and restore | CLI and Python APIs for manual generations, validation and restore |
-| IMPORT, SORT, BACKUP, AUDIT | Not implemented |
+| AUDIT | Quick metadata comparison for two selected archive targets |
+| IMPORT, SORT, BACKUP | Planned |
 | Backup menu/month availability | Not implemented; configuration records intended scope and filtering mode |
 | Configuration wizard | Future enhancement; settings are currently edited in `.env` |
 
