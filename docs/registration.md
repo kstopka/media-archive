@@ -34,7 +34,7 @@ validate_registered_configuration(candidate)
 
 SQLite serializes registration writers. The API rechecks each supplied previous device and volume under the write lock. If another registration changed the binding after review, the stale approval is rejected. An invalid or unused approval fails the whole batch. Repeating registration of an unchanged configuration without change approvals leaves the registry unchanged.
 
-Changes to existing block-volume bindings also require exclusive access to the installation. A live [volume verification context](devices.md#python-api) holds shared access until it exits.
+Approved device replacements and reformats also require exclusive access to the installation. Live [source contexts](sources.md#open-a-source) hold shared access until they exit.
 
 Database creation and migrations are explicit [state lifecycle operations](state.md). Revision `0002` adds empty registry tables. Loading settings and running `--check-config` read configuration only. Registry checks read the database without changing it. Registration writes only database state.
 

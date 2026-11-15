@@ -337,9 +337,8 @@ def register_configuration(config: Configuration, *, device_changes: Iterable[De
         if key in changes:
             raise ConfigError("Powtórzone potwierdzenie zmiany urządzenia.")
         changes[key] = change
-    changes_volume = any(key.role != "phone" for key in changes)
     with (
-        open_database(config.app.database_file, writable=True, exclusive=changes_volume) as connection,
+        open_database(config.app.database_file, writable=True, exclusive=bool(changes)) as connection,
         transaction(connection),
     ):
         _check_configuration(connection, config, register=True, changes=changes)

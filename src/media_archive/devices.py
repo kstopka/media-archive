@@ -209,11 +209,11 @@ def verify_volume(config: Configuration, key: DeviceKey, target: Path | None = N
         yield volume
 
 
-def open_media_file(volume: MountedVolume, relative: Path, *, scope: Path | None = None) -> BinaryIO:
-    """Open a regular file below a verified root without traversing links or nested mounts."""
+@contextmanager
+def _media_descriptor(volume: MountedVolume, relative: Path, scope: Path | None) -> Generator[int, None, None]:
     require_utf8(str(relative), StateError)
-    if relative.anchor or not relative.parts or ".." in relative.parts or "\0" in str(relative):
-        raise StateError("Wymagana jest bezpieczna ścieżka pliku względem korzenia woluminu.")
+    if relative.anchor or ".." in relative.parts or "\0" in str(relative):
+        raise StateError("Wymagana jest bezpieczna ścieżka względem korzenia woluminu.")
     if scope is not None:
         _absolute(scope)
         if not scope.is_relative_to(volume.root):
@@ -225,10 +225,18 @@ def open_media_file(volume: MountedVolume, relative: Path, *, scope: Path | None
             if not os.path.samestat(os.fstat(root), os.fstat(volume._root_fd)):
                 raise StateError("Korzeń woluminu zmienił się podczas sprawdzania.")
             parent = _directory(stack, relative.parent, parent=root, mount_id=volume.mount_id)
-            descriptor = os.open(relative.name, os.O_PATH | os.O_NOFOLLOW, dir_fd=parent)
+            descriptor = os.open(relative.name or ".", os.O_PATH | os.O_NOFOLLOW, dir_fd=parent)
             stack.callback(os.close, descriptor)
-            if not stat.S_ISREG(os.fstat(descriptor).st_mode) or _mount_id(descriptor) != volume.mount_id:
-                raise StateError("Ścieżka nie wskazuje na zwykły plik w sprawdzonym montowaniu.")
-            return open(f"/proc/self/fd/{descriptor}", "rb")
+            if _mount_id(descriptor) != volume.mount_id:
+                raise StateError("Ścieżka przechodzi do innego montowania.")
+            yield descriptor
     except (OSError, ValueError):
-        raise StateError("Nie można bezpiecznie otworzyć pliku na woluminie.") from None
+        raise StateError("Nie można bezpiecznie otworzyć ścieżki na woluminie.") from None
+
+
+def open_media_file(volume: MountedVolume, relative: Path, *, scope: Path | None = None) -> BinaryIO:
+    """Open a regular file below a verified root without traversing links or nested mounts."""
+    with _media_descriptor(volume, relative, scope) as descriptor:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise StateError("Ścieżka nie wskazuje na zwykły plik w sprawdzonym montowaniu.")
+        return open(f"/proc/self/fd/{descriptor}", "rb")

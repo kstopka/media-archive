@@ -14,7 +14,7 @@ The CLI reads and validates configuration. A separate [SQLite state API](state.m
 | SQLAlchemy Core | `>=2.1,<2.2` | Database connections and transactions |
 | Python standard library | Python >=3.11 | sqlite3, argparse, pathlib, zoneinfo, unittest and supporting utilities |
 
-The repository uses a **src layout**: application packages live under `src/media_archive/`, while tests and documentation remain at the root. Setuptools maps the package root to `src` and discovers `media_archive*` packages there, disables namespace packages and excludes package data. Documentation/tests are repository resources, not runtime package data. SQLite is available through the explicit state API. ExifTool, ADB and rsync remain future components. The configuration path does not invoke any of these components.
+The repository uses a **src layout**: application packages live under `src/media_archive/`, while tests and documentation remain at the root. Setuptools maps the package root to `src` and discovers `media_archive*` packages there, disables namespace packages and excludes package data. Documentation/tests are repository resources, not runtime package data. SQLite is available through the explicit state API. The Android source adapter uses the ADB client. ExifTool and rsync remain future components. The configuration path does not invoke these tools.
 
 ```text
 repository/
@@ -48,6 +48,7 @@ Paths below are relative to the repository root.
 | [config/validation.py](../src/media_archive/config/validation.py) | Cross-model references, collection tree, source rules and storage boundaries |
 | [config/errors.py](../src/media_archive/config/errors.py) | `ConfigError`, a `ValueError` subclass with safe CLI messages |
 | [devices.py](../src/media_archive/devices.py) | Verify Linux mounts and block-device evidence; open files within a verified scope |
+| [sources.py](../src/media_archive/sources.py) | List local and ADB sources, inspect attributes and stream regular files |
 | [state/database.py](../src/media_archive/state/database.py) | Explicit creation/opening, connection lifetime, short transactions and migration entry point |
 | [state/migrations.py](../src/media_archive/state/migrations.py) | Application identity, Alembic revision validation and migration entry point |
 | [state/registry.py](../src/media_archive/state/registry.py) | Trusted identity reads, configuration checks and explicit registration |

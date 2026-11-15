@@ -14,6 +14,7 @@ from media_archive.state import (
     register_configuration, validate_registered_configuration,
 )
 from media_archive.state import migrations
+from media_archive.state._installation import OperationBusy
 from tests.config_fixtures import registry_values, write_config
 
 
@@ -302,6 +303,8 @@ class StateRegistryTests(unittest.TestCase):
         def replace(candidate: Configuration) -> bool:
             try:
                 register_configuration(candidate, device_changes=[DeviceChange(previous, "replace")])
+            except OperationBusy:
+                return False
             except ConfigError as error:
                 self.assertIn("potwierdzenia", str(error))
                 return False

@@ -14,6 +14,7 @@ Current coverage includes the package and CLI skeleton, configuration, SQLite li
 | [state.md](state.md) | Explicit SQLite creation/opening, transactions, migration API, errors and limits |
 | [registration.md](registration.md) | Persistent identities, registered destinations, device changes and approval API |
 | [devices.md](devices.md) | Linux mount checks, safe file paths and explicit device changes |
+| [sources.md](sources.md) | Read-only local and ADB adapters for listing, attributes and byte streams |
 | [history.md](history.md) | Media occurrences, evidence, archive requirements and initialization |
 | [journal.md](journal.md) | Operation attempts, resource locks and recovery |
 | [cli.md](cli.md) | Setup, migrations, planning, journal previews and report retention |
@@ -55,7 +56,7 @@ These documents use neutral examples and do not depend on private planning notes
 | CLI | Help, configuration checks, setup, migration, journal previews and reports |
 | Configuration | Literal `.env` parsing, immutable models, references, collection trees and lexical storage validation |
 | Collections and policies | Configuration and pure lookup methods; no scanning or file mutations |
-| Sources/storage | Linux volume checks and safe file opens; ADB and source inventories remain planned |
+| Sources/storage | Linux volume checks and read-only local and ADB adapters. Inventory workflows remain planned. |
 | Stable identity guard | In-memory key checks, with trusted keys loaded from SQLite by the registry API |
 | SQLite | Explicit creation/opening, schema validation, transactions and migrations through a Python API |
 | Persistent registration | Explicit Python API for identities, bindings, archive destination reservations and hardware changes |
