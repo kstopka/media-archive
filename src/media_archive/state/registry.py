@@ -5,10 +5,11 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
-from sqlalchemy import select
+from sqlalchemy import literal_column, select
 from sqlalchemy.engine import Connection, RowMapping
 from sqlalchemy.sql.selectable import TableClause
 
+from media_archive._encoding import require_utf8
 from media_archive.config import (
     ConfigError, Configuration, ConfigurationIdentities, validate_registered_identities,
 )
@@ -38,6 +39,7 @@ class RegisteredDevice:
     volume_id: int | None
     serial: str | None = field(repr=False)
     uuid: str | None = field(repr=False)
+    hardware_id: str | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -91,8 +93,9 @@ def _insert_device_row(connection: Connection, table: TableClause, **values: obj
 
 
 def _current_device(connection: Connection, key: DeviceKey, slot_id: int) -> RegisteredDevice:
+    # Read known older revisions, where hardware_id does not exist yet, without migrating them.
     device = connection.execute(
-        tables.devices.select().where(tables.devices.c.slot_id == slot_id)
+        select(literal_column("*")).select_from(tables.devices).where(tables.devices.c.slot_id == slot_id)
         .order_by(tables.devices.c.id.desc()).limit(1)
     ).mappings().one_or_none()
     if device is None:
@@ -103,7 +106,7 @@ def _current_device(connection: Connection, key: DeviceKey, slot_id: int) -> Reg
     ).mappings().one_or_none()
     return RegisteredDevice(
         key, device.id, volume.id if volume is not None else None,
-        device.serial, volume.uuid if volume is not None else None,
+        device.serial, volume.uuid if volume is not None else None, device.get("hardware_id"),
     )
 
 
@@ -258,7 +261,9 @@ def _ensure_device(
     if new_device:
         serial = evidence if phone else None
         serial_key = serial.casefold() if serial is not None else None
-        if serial_key is not None and _find(connection, tables.devices, serial_key=serial_key) is not None:
+        if serial_key is not None and connection.execute(
+            select(tables.devices.c.id).where(tables.devices.c.serial_key == serial_key),
+        ).scalar_one_or_none() is not None:
             raise ConfigError("Identyfikator telefonu należy już do zapisanego urządzenia.")
         device_id = _insert_device_row(
             connection, tables.devices, slot_id=slot_id, serial=serial, serial_key=serial_key,
@@ -332,10 +337,64 @@ def register_configuration(config: Configuration, *, device_changes: Iterable[De
         if key in changes:
             raise ConfigError("Powtórzone potwierdzenie zmiany urządzenia.")
         changes[key] = change
-    with open_database(config.app.database_file, writable=True) as connection, transaction(connection):
+    changes_volume = any(key.role != "phone" for key in changes)
+    with (
+        open_database(config.app.database_file, writable=True, exclusive=changes_volume) as connection,
+        transaction(connection),
+    ):
         _check_configuration(connection, config, register=True, changes=changes)
         if changes:
             raise ConfigError("Potwierdzona zmiana urządzenia nie odpowiada konfiguracji.")
+
+
+def change_registered_volume(
+    path: Path, previous: RegisteredDevice, action: Literal["register", "replace", "reformat"],
+    uuid: str, hardware_id: str | None, *, dry_run: bool,
+) -> None:
+    """Check or apply one approved binding, leaving unrelated settings alone."""
+    require_utf8(uuid, ConfigError)
+    if hardware_id is not None:
+        require_utf8(hardware_id, ConfigError)
+    if previous.key.role == "phone" or not uuid or action not in ("register", "replace", "reformat"):
+        raise ConfigError("Zmiana wymaga zarejestrowanego powiązania woluminu i jego UUID.")
+    with open_database(path, writable=not dry_run, exclusive=not dry_run) as connection:
+        if dry_run:
+            _change_volume(connection, previous, action, uuid, hardware_id, dry_run=True)
+        else:
+            with transaction(connection):
+                _change_volume(connection, previous, action, uuid, hardware_id, dry_run=False)
+
+
+def _change_volume(
+    connection: Connection, previous: RegisteredDevice, action: Literal["register", "replace", "reformat"],
+    uuid: str, hardware_id: str | None, *, dry_run: bool,
+) -> None:
+    key = previous.key
+    slot = _find(connection, tables.device_slots, role=key.role, alias=key.alias, group_id=key.group_id)
+    if slot is None or previous.device_id is None or _current_device(connection, key, slot.id) != previous:
+        raise ConfigError("Powiązanie urządzenia uległo zmianie. Sprawdź aktualny rejestr.")
+    same_uuid = previous.uuid is not None and previous.uuid.casefold() == uuid.casefold()
+    if action == "register":
+        if previous.uuid is not None and not same_uuid:
+            raise ConfigError("Zmiana UUID wymaga jawnej wymiany lub rejestracji formatowania.")
+    elif previous.uuid is None or same_uuid:
+        raise ConfigError("Wymiana lub formatowanie wymagają nowego UUID dla znanego woluminu.")
+    if previous.hardware_id is not None:
+        if action == "replace" and hardware_id == previous.hardware_id:
+            raise ConfigError("Wymiana wymaga innego urządzenia fizycznego.")
+        if action != "replace" and hardware_id != previous.hardware_id:
+            raise ConfigError("Identyfikator fizycznego urządzenia nie zgadza się z rejestrem.")
+    if not same_uuid and _find(connection, tables.volume_episodes, uuid_key=uuid.casefold()) is not None:
+        raise ConfigError("UUID należy już do zapisanego epizodu woluminu.")
+    if dry_run:
+        return
+
+    changes = {} if action == "register" else {key: DeviceChange(previous, action)}
+    _ensure_device(connection, key, uuid, slot.source_id, changes, register=True)
+    if hardware_id is not None:
+        current = _current_device(connection, key, slot.id)
+        devices = tables.devices
+        connection.execute(devices.update().where(devices.c.id == current.device_id).values(hardware_id=hardware_id))
 
 
 def initialize_database(config: Configuration) -> None:

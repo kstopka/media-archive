@@ -48,7 +48,7 @@ python -m media_archive --config "/absolute/path/to/custom.env"
 python -m unittest discover -s tests -v
 ```
 
-Setup creates `state.sqlite3` in `APP_STATE_DIR`. The [CLI reference](docs/cli.md) covers migration, recovery previews and reports. Configuration checks do not create a database, change files or contact devices. They validate settings, not physical disk availability or identity.
+Setup creates `state.sqlite3` in `APP_STATE_DIR`. The [CLI reference](docs/cli.md) covers migration, recovery previews and reports. See [device checks and registration](docs/devices.md) for mounted Linux volumes. Configuration checks do not create a database, change files or contact devices. They validate settings, not physical disk availability or identity.
 
 ## Documentation
 

@@ -1,6 +1,6 @@
 # Archive workflows and state — planned design
 
-**Design reference.** This document records requirements for future media operations. The current [configuration](../configuration.md), [SQLite lifecycle](../state.md) and [persistent registration](../registration.md) have separate implementation references. The [history API](../history.md) stores media evidence and initialization progress. The [journal API](../journal.md) records attempts and coordinates locks. Device adapters, transfers, audits and workflow recovery remain planned.
+**Design reference.** This document records requirements for future media operations. The current [configuration](../configuration.md), [SQLite lifecycle](../state.md) and [persistent registration](../registration.md) have separate implementation references. The [history API](../history.md) stores media evidence and initialization progress. The [journal API](../journal.md) records attempts and coordinates locks. Linux mount checks and explicit volume changes are available through the [device API](../devices.md). Source adapters, transfers, audits and workflow recovery remain planned.
 
 The [roadmap](../roadmap.md) defines delivery order. Requirements below describe intended behavior; proposed module/table names and protocols remain implementation designs, not existing APIs. Examples are neutral and do not describe a particular installation.
 

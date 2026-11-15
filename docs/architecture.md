@@ -47,6 +47,7 @@ Paths below are relative to the repository root.
 | [config/field_types.py](../src/media_archive/config/field_types.py) | Reusable field types and validators |
 | [config/validation.py](../src/media_archive/config/validation.py) | Cross-model references, collection tree, source rules and storage boundaries |
 | [config/errors.py](../src/media_archive/config/errors.py) | `ConfigError`, a `ValueError` subclass with safe CLI messages |
+| [devices.py](../src/media_archive/devices.py) | Verify Linux mounts and block-device evidence; open files within a verified scope |
 | [state/database.py](../src/media_archive/state/database.py) | Explicit creation/opening, connection lifetime, short transactions and migration entry point |
 | [state/migrations.py](../src/media_archive/state/migrations.py) | Application identity, Alembic revision validation and migration entry point |
 | [state/registry.py](../src/media_archive/state/registry.py) | Trusted identity reads, configuration checks and explicit registration |
@@ -57,7 +58,7 @@ Paths below are relative to the repository root.
 
 Both `python -m media_archive` and the installed `media-archive` script reach `media_archive.cli.main(argv=None)`.
 
-The [CLI reference](cli.md) describes setup, migrations, read-only journal previews, report storage and exit statuses. Command handlers reuse the configuration loader, state registry and operation journal. Media execution remains in the planned workflow layer.
+The [CLI reference](cli.md) describes setup, migrations, device checks and registration, read-only journal previews, report storage and exit statuses. Command handlers reuse the configuration loader, state registry and operation journal. Media execution remains in the planned workflow layer.
 
 ## Configuration execution
 
@@ -98,4 +99,4 @@ Pydantic field validation establishes individual value types. `validate_relation
 
 Collection helper methods resolve configuration scopes and policies only. They do not generate a transfer plan, find actual months, check connected targets, deduplicate files by hash, confirm deletions or establish verified copies.
 
-`Configuration.archive_mapping()` prepares a normalized relative mapping string. The state registry compares effective destinations with persisted reservations. A configured UUID supplies registration evidence. Physical device and mount verification remain future work.
+`Configuration.archive_mapping()` prepares a normalized relative mapping string. The state registry compares effective destinations with persisted reservations. A configured UUID supplies registration evidence. The [runtime volume checks](devices.md) compare that evidence with the live mount and block-device inventory.

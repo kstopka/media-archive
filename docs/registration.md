@@ -1,6 +1,6 @@
 # Persistent configuration registration
 
-The state registry stores stable source, collection, backup profile, archive group and device identities in SQLite. It checks a loaded configuration against previously approved registrations. Use the Python API in `media_archive.state` with an existing database. Operator commands and physical device recognition belong to later stages.
+The state registry stores stable source, collection, backup profile, archive group and device identities in SQLite. It checks a loaded configuration against previously approved registrations. Use the Python API in `media_archive.state` with an existing database. The [device commands](devices.md) use this registry for live volume checks and explicit changes.
 
 ## Entry points
 
@@ -34,6 +34,8 @@ validate_registered_configuration(candidate)
 
 SQLite serializes registration writers. The API rechecks each supplied previous device and volume under the write lock. If another registration changed the binding after review, the stale approval is rejected. An invalid or unused approval fails the whole batch. Repeating registration of an unchanged configuration without change approvals leaves the registry unchanged.
 
+Changes to existing block-volume bindings also require exclusive access to the installation. A live [volume verification context](devices.md#python-api) holds shared access until it exits.
+
 Database creation and migrations are explicit [state lifecycle operations](state.md). Revision `0002` adds empty registry tables. Loading settings and running `--check-config` read configuration only. Registry checks read the database without changing it. Registration writes only database state.
 
 ## Bindings and destinations
@@ -49,7 +51,7 @@ Local volumes, archive targets, phones and camera cards have separate roles. Arc
 
 A disabled phone profile retains its previous association. A card can be registered before its UUID is available. Its first registered UUID establishes the first volume episode. Clearing a known card UUID in configuration fails the registry check. UUID comparisons are case-insensitive. A known historical UUID or phone serial remains reserved to prevent accidentally registering the same evidence for a new device or episode. Resolving reused hardware identifiers requires a separate workflow.
 
-Registered evidence records an operator-approved configuration association. Physical presence, mount safety, physical independence and cloned-device detection require runtime verification. The [history and initialization APIs](history.md) record evidence and progress separately from registration.
+Revision `0006` stores approved hardware evidence on the device record, separately from filesystem episodes and the ADB serial field. The [runtime device API](devices.md) checks physical presence, mount safety and the available hardware evidence. The [history and initialization APIs](history.md) record evidence and progress separately from registration.
 
 ## Errors and verification
 

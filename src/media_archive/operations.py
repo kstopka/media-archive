@@ -2,14 +2,16 @@
 
 from pathlib import Path
 import stat
+from typing import Literal
 
 from media_archive._encoding import require_utf8
-from media_archive.config import Configuration
-from media_archive.state import StateError, migrate_database, open_database, schema_version
+from media_archive.config import ConfigError, Configuration
+from media_archive.devices import inspect_volume, registered_volume, verify_volume
+from media_archive.state import DeviceKey, StateError, migrate_database, open_database, schema_version
 from media_archive.state.journal import load_attempts, load_operation, load_unfinished, recommended_recovery
 from media_archive.state.migrations import _head_revision
 from media_archive.state.reconciliation import load_reconciliation
-from media_archive.state.registry import initialize_database, validate_registered_configuration
+from media_archive.state.registry import change_registered_volume, initialize_database, validate_registered_configuration
 
 
 def _resolved(path: Path) -> Path:
@@ -25,7 +27,8 @@ def _overlap(first: Path, second: Path) -> bool:
     return first.is_relative_to(second) or second.is_relative_to(first)
 
 
-def check_application_paths(config: Configuration, *, reports: bool = False) -> None:
+def check_application_paths(config: Configuration, *, reports: bool = False,
+                            device_mount: Path | None = None) -> None:
     """Check physical separation before opening state or writing generated files."""
     state = _resolved(config.app.state_dir)
     settings = _resolved(config.source_file)
@@ -35,6 +38,8 @@ def check_application_paths(config: Configuration, *, reports: bool = False) -> 
         *(collection.local_root for collection in config.collections),
         *(target.mount for group in config.archive_groups for target in group.targets),
     )]
+    if device_mount is not None:
+        media.append(_resolved(device_mount))
     protected = [settings, *media]
     if any(_overlap(state, path) for path in protected):
         raise StateError("Katalog stanu koliduje z konfiguracją lub ścieżką danych.")
@@ -98,6 +103,27 @@ def migrate(config: Configuration, *, dry_run: bool) -> dict[str, object]:
     with open_database(config.app.database_file) as connection:
         before = schema_version(connection)
     return {"Rewizja bieżąca": before, "Rewizja docelowa": _head_revision()}
+
+
+def device(config: Configuration, key: DeviceKey, target: Path | None, *,
+           action: Literal["check", "register", "replace", "reformat"], dry_run: bool) -> dict[str, object]:
+    if action == "check":
+        with verify_volume(config, key, target):
+            return {"Montowanie": "sprawdzone w trybie odczytu"}
+
+    previous = registered_volume(config, key)
+    with inspect_volume(config, key, target) as volume:
+        if action == "replace" and previous.hardware_id in volume.hardware_ids:
+            raise ConfigError("Wymiana wymaga innego urządzenia fizycznego.")
+        hardware_id = volume.hardware_id(None if action == "replace" else previous.hardware_id)
+        change_registered_volume(config.app.database_file, previous, action, volume.uuid, hardware_id, dry_run=dry_run)
+    return {
+        "ID dotychczasowego urządzenia": previous.device_id,
+        "Dotychczasowy UUID (końcówka)": previous.uuid[-4:] if previous.uuid else None,
+        "Wykryty UUID (końcówka)": volume.uuid[-4:],
+        "Identyfikator sprzętowy": "dostępny" if hardware_id else "niedostępny",
+        "Zmiana": {"register": "rejestracja", "replace": "wymiana", "reformat": "formatowanie"}[action],
+    }
 
 
 def pending(config: Configuration, operation_id: int | None = None) -> dict[str, object]:

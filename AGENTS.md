@@ -40,7 +40,11 @@ Use `unittest`, `test_*.py` files and `test_*` methods. Cover changed contracts,
 
 ## Feature Workflow
 
-This is a new application in its first MVP iteration. Before implementing a feature, check the standard library, existing dependencies and established libraries. Use suitable existing tools for common mechanisms whenever they simplify implementation. For a new dependency, explain its name, purpose and benefit and wait for the user's decision before adding it. Approved dependencies need no renewed approval.
+This is a new application in its first MVP iteration. Implement only what the agreed task needs to work end to end and meet its data protection and recovery requirements. Keep changes focused on the task and defer unrelated refactoring, speculative abstractions, and extra features. Record optional scenarios and edge cases in the implementation plan for review once the MVP works.
+
+Keep code review and follow-up fixes within the agreed MVP scope. For each proposed blocker, identify the affected workflow and its concrete impact. Fix issues that materially affect correctness, data safety, or required recovery, even when they occur rarely. Defer other findings and use focused verification after fixes. Request another full review only when a substantial change warrants it or the user asks for one.
+
+Before implementing a feature, check the standard library, existing dependencies and established libraries. Use suitable existing tools for common mechanisms whenever they simplify implementation. For a new dependency, explain its name, purpose and benefit and wait for the user's decision before adding it. Approved dependencies need no renewed approval.
 
 When a new solution replaces an MVP implementation, remove the superseded code and its obsolete compatibility paths. Add compatibility for earlier prototypes only when the user explicitly requires it.
 

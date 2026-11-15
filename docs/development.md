@@ -40,6 +40,7 @@ The SQLite foundation verification passed **122 tests on Python 3.14.4 with SQLi
 | [test_collection_config.py](../tests/test_collection_config.py) | Current generic model: root/month scopes, nearest policy, new profiles/volumes, unassigned collections, reference/tree/storage rejection, explicit deletion eligibility, no-write behavior and archive names with `_TARGET_`/ambiguous prefixes |
 | [test_config_identities.py](../tests/test_config_identities.py) | Display label edits/defaults , unknown IDs and explicit registration, retained offline identities, hardware changes and no-write checks |
 | [test_state_database.py](../tests/test_state_database.py) | Explicit SQLite lifecycle, read-only behavior, migration transactions, constraints, publication failures, concurrent creation/migration and recovery after process termination |
+| [test_devices.py](../tests/test_devices.py) | Synthetic Linux volume probes, safe opens and explicit registration commands |
 | [test_state_snapshots.py](../tests/test_state_snapshots.py) | Active SQLite snapshots, integrity validation, exclusive restore and reconciliation |
 | [test_state_journal.py](../tests/test_state_journal.py) | Journal migration, contention between processes, recovery and atomic history commits |
 | [test_state_history.py](../tests/test_state_history.py) | Media history, archive requirements, migration and initialization checkpoints |
@@ -67,7 +68,7 @@ Before adding a setting, decide which object owns it. Local paths belong to coll
 
 Before implementing a feature, review the standard library, existing dependencies and suitable ready-made libraries. If a new library can replace a common mechanism, explain its name, purpose and benefit and wait for the user's decision before adding it. Finish feature changes by updating their technical documentation and the feature index in `docs/README.md`; keep user-facing README changes concise.
 
-Keep the existing read-only boundary of `load_config()` and help. Do not introduce database creation, media scanning or registrations as a side effect of configuration checks. Validate physical devices in a future runtime subsystem, not by making configuration loading depend on plugged-in hardware.
+Keep the existing read-only boundary of `load_config()` and help. Do not introduce database creation, media scanning or registrations as a side effect of configuration checks. Validate physical devices through the separate [runtime volume checks](devices.md).
 
 ## Documentation and repository boundaries
 

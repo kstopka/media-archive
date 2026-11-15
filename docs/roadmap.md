@@ -31,7 +31,7 @@ Before production registration, confirm the intended archive layout. Local readi
 
 This stage provides inventory primitives, not media transfers.
 
-- [ ] **2.1 Device identity and safe paths.** Validate system-mounted volumes, roles, UUIDs and additional evidence. Reject ambiguous/replaced devices, unsafe links and special files. A missing mount must not redirect writes into an empty system directory.
+- [x] **2.1 Device identity and safe paths.** System-mounted volume checks, roles, UUIDs, available hardware evidence, safe opens and explicit binding changes. Synthetic verification is complete; real-device trials remain separate. See [Linux volume identification](devices.md).
 - [ ] **2.2 Local and ADB source adapters.** Listing, attributes, authorization, multiple devices and explicit adapter capabilities. Failures must not become empty-source results; filenames must never execute shell commands.
 - [ ] **2.3 SHA-256 and stable reads.** Streaming hashes, progress, cancellation and read-stability checks. Changed sources, failures and interruptions must invalidate evidence; new transfers/full audits cannot rely solely on metadata.
 

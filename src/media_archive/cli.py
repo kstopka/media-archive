@@ -8,7 +8,7 @@ import sys
 from media_archive import operations
 from media_archive.config import ConfigError, load_config
 from media_archive.reports import Report, write_report
-from media_archive.state import DatabasePublishedError, StateError
+from media_archive.state import DatabasePublishedError, DeviceKey, StateError
 from media_archive.state.snapshots import SnapshotPublishedError, create_snapshot, restore_snapshot, validate_snapshot
 
 
@@ -20,6 +20,17 @@ def _operation_id(value: str) -> int:
     if not 0 < number <= 2**63 - 1:
         raise argparse.ArgumentTypeError("ID operacji musi być dodatnią liczbą całkowitą.")
     return number
+
+
+def _device_key(value: str) -> DeviceKey:
+    match value.split(":"):
+        case ["card", alias] if alias:
+            return DeviceKey("card", alias)
+        case ["local", alias] if alias:
+            return DeviceKey("local", alias)
+        case ["archive", group, alias] if group and alias:
+            return DeviceKey("archive", alias, group)
+    raise argparse.ArgumentTypeError("Użyj card:ALIAS, local:ALIAS albo archive:GRUPA:ALIAS.")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -44,6 +55,17 @@ def _parser() -> argparse.ArgumentParser:
     restore = commands.add_parser("restore", help="przywróć bazę z generacji")
     restore.add_argument("generation", type=Path, metavar="GENERACJA")
     restore.add_argument("--yes", action="store_true", help="potwierdź przywrócenie bazy")
+    device = commands.add_parser("device", help="sprawdź lub jawnie zarejestruj wolumin")
+    actions = device.add_subparsers(dest="device_action", required=True)
+    for action, help_text in (
+        ("check", "sprawdź zamontowany wolumin"), ("register", "zatwierdź dowody tożsamości woluminu"),
+        ("replace", "zarejestruj inny nośnik"), ("reformat", "zarejestruj nowy UUID tego samego nośnika"),
+    ):
+        command = actions.add_parser(action, help=help_text)
+        command.add_argument("device_key", type=_device_key, metavar="POWIĄZANIE")
+        command.add_argument("--to", type=Path, metavar="KATALOG", required=action in ("replace", "reformat"))
+        if action != "check":
+            command.add_argument("--yes", action="store_true", help="zapisz sprawdzoną zmianę w rejestrze")
     for command in (setup, migrate, resume):
         command.add_argument("--dry-run", action="store_true", help="pokaż plan bez zapisu stanu")
         command.add_argument("--report", action="store_true", help="zapisz raport tekstowy i JSON")
@@ -78,9 +100,11 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         return 0
 
     dry_run = getattr(args, "dry_run", False)
+    if args.command == "device":
+        dry_run = args.device_action != "check" and not getattr(args, "yes", False)
     save_report = getattr(args, "report", False) or (args.command in ("setup", "migrate") and not dry_run)
     try:
-        operations.check_application_paths(config, reports=save_report)
+        operations.check_application_paths(config, reports=save_report, device_mount=getattr(args, "to", None))
     except StateError as error:
         print(f"Błąd wykonania: {error}", file=sys.stderr)
         return 1
@@ -101,6 +125,14 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             if result.previous_database is not None:
                 details["Poprzednia baza"] = str(result.previous_database)
             message = "Przywrócono bazę. Stan wymaga uzgodnienia z nośnikami."
+        elif args.command == "device":
+            details = operations.device(config, args.device_key, args.to, action=args.device_action, dry_run=dry_run)
+            if args.device_action == "check":
+                message = "Zamontowany wolumin jest zgodny z rejestrem."
+            elif dry_run:
+                message = "Plan zmiany rejestru. Powtórz z --yes, aby zatwierdzić."
+            else:
+                message = "Zapisano zatwierdzoną zmianę rejestru."
         else:
             if args.command == "resume" and not dry_run:
                 raise StateError("Wznowienie transferu będzie dostępne po wdrożeniu operacji na plikach. "

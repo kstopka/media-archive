@@ -12,6 +12,8 @@ Use `media-archive` or `python -m media_archive`. Put `--config FILE` before the
 | `snapshot DIRECTORY` | Create a validated state generation in an existing directory. |
 | `verify-snapshot GENERATION` | Validate a generation independently of the working configuration. |
 | `--config FILE restore GENERATION --yes` | Restore working state in an existing `APP_STATE_DIR` using the selected configuration. |
+| `device check BINDING [--to DIRECTORY]` | Verify a mounted Linux volume for read access. |
+| `device register\|replace\|reformat BINDING [--to DIRECTORY] [--yes]` | Preview or explicitly register one verified volume binding change. See [device commands](devices.md#commands) for path requirements. |
 | `pending` | List unfinished journal operations and their latest attempt states. A listed operation may still have a live owner. |
 | `resume ID --dry-run` | Show the next step for an unfinished operation using its numeric operation ID. Actual file recovery will be available with the transfer workflow. Until then, `resume ID` returns status 1. |
 

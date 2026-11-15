@@ -217,11 +217,11 @@ def _check_write_access(connection: Connection) -> None:
 
 @contextmanager
 def open_database(
-    path: str | Path, *, writable: bool = False,
+    path: str | Path, *, writable: bool = False, exclusive: bool = False,
 ) -> Generator[Connection, None, None]:
-    """Open existing state without creating it or migrating its schema."""
+    """Open existing state, optionally excluding other installation users until close."""
     database = _database_path(path)
-    with installation_lock(database), _connect(database, writable=writable) as connection:
+    with installation_lock(database, exclusive=exclusive), _connect(database, writable=writable) as connection:
         check = connection.begin()
         try:
             version = _validate(connection)
