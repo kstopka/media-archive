@@ -52,6 +52,7 @@ Paths below are relative to the repository root.
 | [audit.py](../src/media_archive/audit.py) | Scan and compare two registered archive roots and record presence observations |
 | [full_audit.py](../src/media_archive/full_audit.py) | Resume full SHA-256 audits and compare observed digests across volumes |
 | [inventory.py](../src/media_archive/inventory.py) | Record the first local and archive inventory in resumable scopes |
+| [phone_initialization.py](../src/media_archive/phone_initialization.py) | Capture a phone baseline and record decisions from saved inventory and full audit evidence |
 | [state/database.py](../src/media_archive/state/database.py) | Explicit creation/opening, connection lifetime, short transactions and migration entry point |
 | [state/migrations.py](../src/media_archive/state/migrations.py) | Application identity, Alembic revision validation and migration entry point |
 | [state/registry.py](../src/media_archive/state/registry.py) | Trusted identity reads, configuration checks and explicit registration |
@@ -62,7 +63,7 @@ Paths below are relative to the repository root.
 
 Both `python -m media_archive` and the installed `media-archive` script reach `media_archive.cli.main(argv=None)`.
 
-The [CLI reference](cli.md) describes setup, migrations, device checks and registration, archive audits, initial inventory, read-only journal previews, report storage and exit statuses. Command handlers reuse the configuration loader, state registry and operation journal. Quick audit reads filesystem metadata. Full audit reads file contents and checkpoints in SQLite. The initial inventory records existing files across configured local and archive scopes. Media transfers remain planned.
+The [CLI reference](cli.md) describes setup, migrations, device checks and registration, archive audits, initial inventory, phone initialization, read-only journal previews, report storage and exit statuses. Command handlers reuse the configuration loader, state registry and operation journal. Quick audit reads filesystem metadata. Full audit reads file contents and checkpoints in SQLite. The initial inventory records existing files across configured local and archive scopes. Media transfers remain planned.
 
 ## Configuration execution
 

@@ -18,6 +18,7 @@ Use `media-archive` or `python -m media_archive`. Put `--config FILE` before the
 | `audit --mode full --group GROUP --targets FIRST SECOND` | Compare SHA-256 and save progress in SQLite. See [full audit](audit.md#full-sha-256-audit). |
 | `audit --resume AUDIT_ID` | Resume a saved full audit on the same registered volumes. |
 | `inventory [--hash-local]` | Build or resume the [initial inventory](inventory.md); optionally read local SHA-256. |
+| `init-phone PROFILE [--audit AUDIT_ID]` | Capture a [phone baseline](phone-initialization.md) or compare it using a completed full audit. |
 | `pending` | List unfinished journal operations and their latest attempt states. A listed operation may still have a live owner. |
 | `resume ID --dry-run` | Show the next step for an unfinished operation using its numeric operation ID. Actual file recovery will be available with the transfer workflow. Until then, `resume ID` returns status 1. |
 
@@ -29,7 +30,7 @@ The recovery preview distinguishes a new attempt from an explicit takeover of an
 
 ## Reports and exit status
 
-Setup, migration, audit and inventory executions save one UTF-8 text/JSON pair per finished invocation after loading a valid configuration and checking output locations. Planning displays its result in the terminal. Add `--report` to a dry run to save the pair. A dry run makes no state, registration or media changes. If its report directory is under the state directory, producing that report may also create the parent directories.
+Setup, migration, audit, inventory and phone initialization executions save one UTF-8 text/JSON pair per finished invocation after loading a valid configuration and checking output locations. Planning displays its result in the terminal. Add `--report` to a dry run to save the pair. A dry run makes no state, registration or media changes. If its report directory is under the state directory, producing that report may also create the parent directories.
 
 State and report paths are checked against resolved collection roots, including collections reached through symbolic links. When a report is requested, the CLI rejects an existing non-directory or symbolic link at `APP_REPORTS_DIR` before setup or migration writes state.
 
@@ -42,7 +43,7 @@ Rotation checks the Media Archive format marker and requires the invocation ID a
 | 0 | Success or completed preview |
 | 1 | Execution error |
 | 2 | Invalid arguments or configuration |
-| 3 | Partial result. An audit or inventory has pending scopes or could not save progress, a published database or snapshot could not be confirmed durable, or a completed execution could not save its report. |
+| 3 | Partial result. An audit, inventory, or phone initialization has pending work or could not save progress, a published database or snapshot could not be confirmed durable, or a completed execution could not save its report. |
 | 4 | Audit completed and detected differences in paths, attributes or full-mode SHA-256. |
 | 130 | Interrupted by the operator |
 

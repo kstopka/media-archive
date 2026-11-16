@@ -17,6 +17,7 @@ Current coverage includes the package and CLI, configuration, SQLite lifecycle, 
 | [sources.md](sources.md) | Read-only local and ADB adapters, streaming SHA-256 and read stability checks |
 | [audit.md](audit.md) | Quick comparisons, resumable SHA-256 reads and audit reports |
 | [inventory.md](inventory.md) | First inventory of local collections and archive targets, and how to resume it |
+| [phone-initialization.md](phone-initialization.md) | Capture a phone baseline, compare content and record initial decisions |
 | [history.md](history.md) | Media occurrences, evidence, archive requirements and initialization |
 | [journal.md](journal.md) | Operation attempts, resource locks and recovery |
 | [cli.md](cli.md) | Setup, migrations, planning, journal previews and report retention |
@@ -67,6 +68,7 @@ These documents use neutral examples and do not depend on private planning notes
 | State snapshots and restore | CLI and Python APIs for manual generations, validation and restore |
 | AUDIT | Quick metadata comparison and resumable full SHA-256 comparison for two selected archive targets |
 | Initial inventory | Durable local collection and archive scopes, with optional local SHA-256 |
+| Phone initialization | Fixed ADB baseline and initial decisions against saved local and archive evidence |
 | IMPORT, SORT, BACKUP | Planned |
 | Backup menu/month availability | Not implemented; configuration records intended scope and filtering mode |
 | Configuration wizard | Future enhancement; settings are currently edited in `.env` |

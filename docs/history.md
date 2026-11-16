@@ -36,4 +36,6 @@ A file target cannot be a registered destination directory or one of its ancesto
 
 For `baseline_skip_missing`, start with the registered phone used for the baseline. After comparison completes, `record_baseline_skip()` can record a decision for a known occurrence from that phone. `load_baseline_skips()` reads these decisions by profile. The decision records a skip independently of import and copy history. The caller determines which occurrences fall within the baseline and supplies the evidence from inventory and comparison. Hardware, labels and policy edits preserve recorded initialization state.
 
+The [phone initialization workflow](phone-initialization.md) fixes the baseline manifest, checks the saved evidence and records the decisions. Local gaps that require a transfer leave its processing scope pending.
+
 [History tests](../tests/test_state_history.py) exercise migration, distinct occurrences, evidence, archive requirements, resumable initialization and transaction rollback with synthetic data. The API stores evidence supplied by callers. The [initial inventory](inventory.md) records existing files and durable scope progress independently of per-profile phone initialization.

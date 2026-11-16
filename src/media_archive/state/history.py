@@ -47,18 +47,22 @@ def _path(value: str, *, absolute: bool) -> PurePosixPath:
     return path
 
 
-def _archive_path_owner(connection: Connection, group: RowMapping, path: PurePosixPath) -> str | None:
-    """Resolve the owner of a file path and reject paths reserved for directories."""
+def archive_destinations(connection: Connection, group_id: str, root: PurePosixPath,
+                         ) -> tuple[tuple[str, PurePosixPath], ...]:
+    """Read all reserved destinations, including collections absent from current settings."""
     destinations = connection.execute(
         select(registry.archive_mappings.c.collection_id, registry.archive_mappings.c.archive_relative)
         .join_from(registry.archive_mappings, registry.backup_profiles,
                    registry.archive_mappings.c.backup_id == registry.backup_profiles.c.id)
-        .where(registry.backup_profiles.c.group_id == group.id)
+        .where(registry.backup_profiles.c.group_id == group_id)
     )
-    group_root = PurePosixPath(group.root_relative)
+    return tuple((collection_id, root / relative) for collection_id, relative in destinations)
+
+
+def _archive_path_owner(connection: Connection, group: RowMapping, path: PurePosixPath) -> str | None:
+    """Resolve the owner of a file path and reject paths reserved for directories."""
     matches = []
-    for collection_id, relative in destinations:
-        destination = group_root / relative
+    for collection_id, destination in archive_destinations(connection, group.id, PurePosixPath(group.root_relative)):
         if destination.is_relative_to(path):
             raise StateError("Ścieżka kopii musi pozostać katalogiem dla zarejestrowanego celu.")
         if path.is_relative_to(destination):
@@ -282,6 +286,19 @@ def load_occurrences(connection: Connection, kind: OccurrenceKind, path: str) ->
     absolute = kind in ("staging", "local") or (kind == "source" and isinstance(path, str) and path.startswith("/"))
     return tuple(connection.execute(
         history.occurrences.select().filter_by(kind=kind, path=str(_path(path, absolute=absolute)))
+        .order_by(history.occurrences.c.id)
+    ).mappings())
+
+
+def load_observed_contents(connection: Connection, run_id: str, kind: OccurrenceKind,
+                           ) -> tuple[RowMapping, ...]:
+    """Read known-content occurrences positively observed in a specific run."""
+    return tuple(connection.execute(
+        select(history.occurrences)
+        .join_from(history.occurrences, history.observations,
+                   history.occurrences.c.id == history.observations.c.occurrence_id)
+        .where(history.observations.c.run_id == run_id, history.observations.c.present.is_(True),
+               history.occurrences.c.kind == kind, history.occurrences.c.content_id.is_not(None))
         .order_by(history.occurrences.c.id)
     ).mappings())
 

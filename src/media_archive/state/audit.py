@@ -31,6 +31,7 @@ class Checkpoint:
     attributes: str
     sha256: str
     read_at: str
+    content_id: int
 
 
 def start_full_audit(connection: Connection, group: str, root: Path, targets: Iterable[tuple[str, int]]) -> str:
@@ -74,10 +75,12 @@ def load_checkpoints(connection: Connection, run_id: str, position: int) -> dict
     with connection.begin():
         rows = connection.execute(select(
             _checkpoints.c.path, _checkpoints.c.attributes, history.contents.c.sha256, _checkpoints.c.read_at,
+            _checkpoints.c.content_id,
         ).join_from(_checkpoints, history.contents, _checkpoints.c.content_id == history.contents.c.id).where(
             _checkpoints.c.run_id == run_id, _checkpoints.c.position == position,
         ))
-        return {Path(path): Checkpoint(attributes, sha256, read_at) for path, attributes, sha256, read_at in rows}
+        return {Path(path): Checkpoint(attributes, sha256, read_at, content_id)
+                for path, attributes, sha256, read_at, content_id in rows}
 
 
 def discard_checkpoints(connection: Connection, run_id: str, position: int, paths: Iterable[Path]) -> None:
@@ -105,4 +108,4 @@ def save_checkpoint(connection: Connection, run_id: str, position: int, volume_i
             index_elements=[_checkpoints.c.run_id, _checkpoints.c.position, _checkpoints.c.path],
             set_={"attributes": attributes, "content_id": content, "read_at": read_at.isoformat()},
         ))
-    return Checkpoint(attributes, sha256, read_at.isoformat())
+    return Checkpoint(attributes, sha256, read_at.isoformat(), content)

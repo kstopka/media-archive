@@ -15,7 +15,7 @@ from media_archive.devices import MountedVolume, VolumeUnavailable, _mount_id
 from media_archive.sources import LocalSource
 from media_archive.state import DeviceKey, StateError, open_database
 from media_archive.state.history import load_source_id, record_observation
-from media_archive.state.initialization import load_initialization
+from media_archive.state.initialization import load_baseline_skips, load_initialization
 from media_archive.state.registry import initialize_database
 from tests.config_fixtures import registry_values, write_config
 
@@ -25,7 +25,9 @@ class InventoryTests(unittest.TestCase):
         root = Path(self.enterContext(TemporaryDirectory()))
         self.settings = root / "settings.env"
         values = registry_values(root)
-        values.update(ARCHIVE_DATA_TARGET_B_STATE="read_only", APP_REPORT_KEEP_RUNS="1")
+        values.update(ARCHIVE_DATA_TARGET_B_STATE="read_only", APP_REPORT_KEEP_RUNS="1",
+                      PHONE_MAIN_INITIAL_POLICY="baseline_skip_missing", PHONE_SECONDARY_TRANSPORT="adb",
+                      PHONE_SECONDARY_SERIAL="synthetic-secondary", PHONE_SECONDARY_CAMERA_DIR="/sdcard/DCIM/Camera")
         write_config(self.settings, values)
         self.config = load_config(self.settings)
         self.config.app.state_dir.mkdir(parents=True)
@@ -63,6 +65,23 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(code, expected, output.getvalue())
         bundle = max(self.config.app.reports_dir.iterdir(), key=lambda path: path.stat().st_mtime_ns)
         return json.loads((bundle / "report.json").read_text(encoding="utf-8"))["szczegóły"]
+
+    @contextmanager
+    def _phone_source(self, root: Path):
+        descriptor = os.open(root, os.O_PATH | os.O_DIRECTORY)
+        try:
+            yield LocalSource(MountedVolume(root, _mount_id(descriptor), "synthetic", "9:1",
+                                            "9:0", (), True, descriptor), root)
+        finally:
+            os.close(descriptor)
+
+    def _archive_copy(self, collection: str, name: str, data: bytes) -> None:
+        relative = self.config.collection(collection).archive_relative
+        for key, root in self.archives.items():
+            if key.group_id == "data":
+                path = root / relative / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(data)
 
     def test_inventory_resumes_across_archives_and_records_nested_ownership(self) -> None:
         a, b, video_a, video_b = self.archives
@@ -189,3 +208,81 @@ class InventoryTests(unittest.TestCase):
             ).scalar_one(), 0)
         completed = self._cli("inventory")["Zakresy spisu"]
         self.assertEqual(completed[0]["pliki"], 2)
+
+    def test_phone_baseline_freezes_manifest_and_waits_for_full_comparison(self) -> None:
+        root = self.settings.parent / "synthetic-phone"
+        root.mkdir()
+        (root / "existing.jpg").write_bytes(b"archived")
+        (root / "previously-selected.jpg").write_bytes(b"phone-only for this profile")
+        self._archive_copy("photos_main", "archived-under-another-name.jpg", b"archived")
+        self._archive_copy("photos_secondary", "other-profile.jpg", b"phone-only for this profile")
+        with patch("media_archive.phone_initialization.open_adb_source", return_value=self._phone_source(root)):
+            baseline = self._cli("init-phone", "main", expected=3)
+        (root / "new.jpg").write_bytes(b"new after the baseline")
+        self.offline.add(DeviceKey("archive", "b", "data"))
+        audit = self._cli("audit", "--mode", "full", "--group", "data", "--targets", "a", "b", expected=3)
+        audit_id = audit["ID audytu"]
+        args = ("init-phone", "main", "--audit", audit_id)
+
+        with patch("media_archive.phone_initialization.open_adb_source", side_effect=AssertionError("opened phone twice")):
+            self._cli("inventory", expected=3)
+            no_hashes = self._cli(*args, expected=3)
+            self.assertNotIn("Pominięcia bazowe", no_hashes)
+            self._cli("inventory", "--hash-local", expected=3)
+            incomplete = self._cli(*args, expected=3)
+            self.assertNotIn("Pominięcia bazowe", incomplete)
+            with open_database(self.config.app.database_file) as connection:
+                source_id = load_source_id(connection, "phone", "main")
+                self.assertEqual(load_baseline_skips(connection, source_id), ())
+            self.offline = {DeviceKey("archive", "a", "data")}
+            self._cli("audit", "--resume", audit_id)
+            result = self._cli(*args)
+            self.assertEqual(result, self._cli("init-phone", "main"))
+
+        self.assertEqual(result["ID spisu telefonu"], baseline["ID spisu telefonu"])
+        self.assertEqual((result["Pliki bazowe"], result["Rozpoznane pliki"], result["Pominięcia bazowe"]), (2, 1, 1))
+        rows = {Path(item["ścieżka"]).name: item for item in result["Decyzje spisu telefonu"]}
+        self.assertEqual(len(rows["existing.jpg"]["odczyty archiwalne"]), 2)
+        self.assertEqual(rows["previously-selected.jpg"]["odczyty archiwalne"], [])
+        with open_database(self.config.app.database_file) as connection:
+            source_id = load_source_id(connection, "phone", "main")
+            self.assertEqual(load_initialization(connection, source_id).status, "completed")
+            self.assertEqual([row.occurrence_id for row in load_baseline_skips(connection, source_id)],
+                             [rows["previously-selected.jpg"]["wystąpienie"]])
+
+    def test_import_missing_keeps_archive_only_file_pending_for_local_copy(self) -> None:
+        root = self.settings.parent / "synthetic-phone"
+        root.mkdir()
+        (root / "local.jpg").write_bytes(b"local")
+        (root / "archive.jpg").write_bytes(b"archive")
+        (self.config.collection("photos_secondary").local_root / "present.jpg").write_bytes(b"local")
+        self._archive_copy("photos_secondary", "archive.jpg", b"archive")
+        self._cli("inventory", "--hash-local")
+        audit = self._cli("audit", "--mode", "full", "--group", "data", "--targets", "a", "b")
+        with patch("media_archive.phone_initialization.open_adb_source", return_value=self._phone_source(root)):
+            result = self._cli("init-phone", "secondary", "--audit", audit["ID audytu"], expected=3)
+        self.assertEqual((result["Rozpoznane pliki"], result["Pominięcia bazowe"], result["Braki lokalne"]), (1, 0, 1))
+        rows = {Path(item["ścieżka"]).name: item for item in result["Decyzje spisu telefonu"]}
+        self.assertEqual(len(rows["archive.jpg"]["odczyty archiwalne"]), 2)
+        self.assertEqual(len(rows["local.jpg"]["lokalne wystąpienia"]), 1)
+        with open_database(self.config.app.database_file) as connection:
+            source_id = load_source_id(connection, "phone", "secondary")
+            state = load_initialization(connection, source_id)
+            self.assertEqual(state.status, "in_progress")
+            self.assertEqual([(scope.phase, scope.completed) for scope in state.scopes],
+                             [("comparison", True), ("processing", False)])
+            for table in ("history_imports", "history_placements", "history_archive_copies", "history_baseline_skips"):
+                self.assertEqual(connection.exec_driver_sql(f"SELECT count(*) FROM main.{table}").scalar_one(), 0)
+
+    def test_interrupted_phone_read_does_not_freeze_a_partial_manifest(self) -> None:
+        root = self.settings.parent / "synthetic-phone"
+        root.mkdir()
+        (root / "example.jpg").touch()
+        with (patch("media_archive.phone_initialization.open_adb_source", return_value=self._phone_source(root)),
+              patch("media_archive.phone_initialization.hash_source_file", side_effect=KeyboardInterrupt)):
+            result = self._cli("init-phone", "main", expected=130)
+        self.assertIsNone(result["ID spisu telefonu"])
+        with open_database(self.config.app.database_file) as connection:
+            self.assertEqual(load_initialization(connection, load_source_id(connection, "phone", "main")).status,
+                             "pending")
+            self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM main.history_occurrences").scalar_one(), 0)

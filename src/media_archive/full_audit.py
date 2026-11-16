@@ -62,6 +62,15 @@ def _load_inventory(side: _Side, stored: dict[Path, Checkpoint]) -> bool:
     return True
 
 
+def load_completed_target(connection: Connection, run_id: str, target: RowMapping,
+                          ) -> tuple[dict[Path, SourceEntry], dict[Path, Checkpoint]]:
+    """Read only checkpoints belonging to the completed inventory of this target."""
+    side = _Side(target)
+    if target.scanned_at is None or not _load_inventory(side, load_checkpoints(connection, run_id, target.position)):
+        raise StateError("Pełny audyt nie obejmuje jeszcze obu wymaganych nośników.")
+    return side.scan.entries, side.hashes
+
+
 def _invalidate(connection: Connection, run_id: str, side: _Side) -> None:
     update_full_audit_target(connection, run_id, side.state.position,
                              inventory=None, scanned_at=None, hardware=json.dumps(side.hardware))

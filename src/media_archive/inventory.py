@@ -66,6 +66,16 @@ def _scopes(config: Configuration) -> Iterator[_Scope]:
             yield _Scope("archive", DeviceKey("archive", target.alias, group.id), target.mount / root, root)
 
 
+def local_hash_run_id(config: Configuration, collection_id: str) -> str | None:
+    """Identify the full local inventory for the configured collection and current volume."""
+    for scope in _scopes(config):
+        if any(name == collection_id for name, _ in scope.collections):
+            volume = registered_volume(config, scope.key)
+            if volume.volume_id is not None:
+                return scope.run_id(volume.volume_id, hash_files=True)
+    return None
+
+
 def _read_scope(config: Configuration, scope: _Scope, hash_files: bool, announce: Callable[[str], None],
                 errors: list[dict[str, str]]) -> list[InventoryFile]:
     files = []

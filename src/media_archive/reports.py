@@ -55,6 +55,10 @@ class Report:
                             lines.append(f"ID obserwacji · {item['ID obserwacji']}")
                         lines.extend(f"- {error['ścieżka']} · {error['błąd']}"
                                      for error in item.get("błędy odczytu", ()))
+            elif key == "Decyzje spisu telefonu":
+                if not summary_only and value:
+                    lines.append(key)
+                    lines.extend(f"- {item['ścieżka']} · {item['decyzja']}" for item in value)
             elif self.command == "audit" and key in ("Różnice", "Błędy skanowania", "Odczytane katalogi", "Odczyty SHA-256"):
                 if not summary_only and value:
                     lines.append(key)

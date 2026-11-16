@@ -10,6 +10,7 @@ from media_archive.audit import quick_audit
 from media_archive.config import ConfigError, load_config
 from media_archive.full_audit import full_audit
 from media_archive.inventory import inventory
+from media_archive.phone_initialization import initialize_phone
 from media_archive.reports import Report, write_report
 from media_archive.state import DatabasePublishedError, DeviceKey, StateError
 from media_archive.state.snapshots import SnapshotPublishedError, create_snapshot, restore_snapshot, validate_snapshot
@@ -65,6 +66,9 @@ def _parser() -> argparse.ArgumentParser:
     audit.add_argument("--resume", metavar="ID_AUDYTU", help="wznów pełny audyt z zapisanej bazy")
     inventory_parser = commands.add_parser("inventory", help="wykonaj lub wznów pierwszy spis zbiorów i archiwów")
     inventory_parser.add_argument("--hash-local", action="store_true", help="odczytaj także SHA-256 lokalnych plików")
+    phone_init = commands.add_parser("init-phone", help="zapisz lub porównaj pierwszy spis telefonu")
+    phone_init.add_argument("profile", metavar="PROFIL")
+    phone_init.add_argument("--audit", metavar="ID_AUDYTU", help="użyj zapisanego pełnego audytu właściwej pary")
     device = commands.add_parser("device", help="sprawdź lub jawnie zarejestruj wolumin")
     actions = device.add_subparsers(dest="device_action", required=True)
     for action, help_text in (
@@ -121,7 +125,7 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if args.command == "device":
         dry_run = args.device_action != "check" and not getattr(args, "yes", False)
     save_report = getattr(args, "report", False) or (
-        args.command in ("setup", "migrate", "audit", "inventory") and not dry_run
+        args.command in ("setup", "migrate", "audit", "inventory", "init-phone") and not dry_run
     )
     try:
         operations.check_application_paths(config, reports=save_report, device_mount=getattr(args, "to", None))
@@ -165,6 +169,10 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             outcome = inventory(config, hash_local=args.hash_local,
                                 announce=lambda message: print(message, file=sys.stderr, flush=True))
             code, message, details = outcome.code, outcome.message, outcome.details
+        elif args.command == "init-phone":
+            outcome = initialize_phone(config, args.profile, audit_id=args.audit,
+                                       announce=lambda message: print(message, file=sys.stderr, flush=True))
+            code, message, details = outcome.code, outcome.message, outcome.details
         else:
             if args.command == "resume" and not dry_run:
                 raise StateError("Wznowienie transferu będzie dostępne po wdrożeniu operacji na plikach. "
@@ -183,7 +191,7 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     except StateError as error:
         report = Report(args.command, 1, f"Błąd wykonania: {error}", dry_run)
 
-    print(report.render(summary_only=args.command in ("audit", "inventory") and save_report), end="",
+    print(report.render(summary_only=args.command in ("audit", "inventory", "init-phone") and save_report), end="",
           file=sys.stderr if report.code else sys.stdout)
     if save_report:
         try:

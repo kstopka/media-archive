@@ -9,7 +9,7 @@ import unicodedata
 
 from media_archive.config import ArchiveGroup, ArchiveTarget, ConfigError, Configuration
 from media_archive.devices import registered_volume
-from media_archive.sources import LocalSource, SourceEntry, open_local_source
+from media_archive.sources import AdbSource, LocalSource, SourceEntry, open_local_source
 from media_archive.state import DeviceKey, StateError, open_database, transaction, validate_registered_configuration
 from media_archive.state._installation import installation_lock
 from media_archive.state.history import create_run, record_observation, record_occurrence
@@ -40,7 +40,7 @@ class QuickAudit:
     details: dict[str, object]
 
 
-def _scan(source: LocalSource, scan: _Scan) -> None:
+def _scan(source: LocalSource | AdbSource, scan: _Scan) -> None:
     while scan.pending:
         directory = scan.pending[-1]
         try:
