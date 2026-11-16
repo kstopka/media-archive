@@ -11,9 +11,10 @@ from unittest.mock import patch
 
 from media_archive.cli import main
 from media_archive.config import load_config
-from media_archive.devices import MountedVolume, _mount_id
-from media_archive.sources import LocalSource
+from media_archive.devices import MountedVolume, VolumeUnavailable, _mount_id
+from media_archive.sources import LocalSource, hash_source_file
 from media_archive.state import StateError, open_database
+from media_archive.state.audit import save_checkpoint
 from media_archive.state.history import record_observation
 from media_archive.state.registry import initialize_database
 from tests.config_fixtures import registry_values, write_config
@@ -36,6 +37,7 @@ class AuditTests(unittest.TestCase):
             path.mkdir(parents=True)
         self.offline = set()
         self.physical_devices = {"a": "8:0", "b": "8:16"}
+        self.hardware = {"a": ("serial:synthetic-a",), "b": ("serial:synthetic-b",)}
         self.enterContext(patch("media_archive.sources.verify_volume", side_effect=self._verify))
 
     @contextmanager
@@ -43,20 +45,22 @@ class AuditTests(unittest.TestCase):
         self.assertEqual(key.group_id, self.group.id)
         self.assertEqual(key.role, "archive")
         if key.alias in self.offline:
-            raise StateError("Testowy nośnik jest odłączony.")
+            raise VolumeUnavailable("Testowy nośnik jest odłączony.")
         mount = self.mounts[key.alias]
         descriptor = os.open(mount, os.O_PATH | os.O_DIRECTORY)
         try:
             yield MountedVolume(mount, _mount_id(descriptor), "synthetic", "8:1",
-                                self.physical_devices[key.alias], key.alias == "b", (), descriptor)
+                                self.physical_devices[key.alias], self.hardware[key.alias], key.alias == "b", descriptor)
         finally:
             os.close(descriptor)
 
     def _run(self, *arguments: str, expected: int = 0, selected: tuple[str, str] = ("a", "b")) -> str:
+        return self._cli("--group", "data", "--targets", *selected, *arguments, expected=expected)
+
+    def _cli(self, *arguments: str, expected: int = 0) -> str:
         out, error = StringIO(), StringIO()
         with redirect_stdout(out), redirect_stderr(error):
-            code = main(["--config", str(self.settings), "audit", "--group", "data",
-                         "--targets", *selected, *arguments])
+            code = main(["--config", str(self.settings), "audit", *arguments])
         self.assertEqual(code, expected, out.getvalue() + error.getvalue())
         return out.getvalue() + error.getvalue()
 
@@ -214,3 +218,156 @@ class AuditTests(unittest.TestCase):
         self.assertIn("różnych fizycznych", self._run(expected=1))
         with open_database(self.config.app.database_file) as connection:
             self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM history_runs").scalar_one(), 0)
+
+    def test_full_audit_compares_same_size_files_with_disks_attached_sequentially(self) -> None:
+        a, b = self.archives.values()
+        for root in (a, b):
+            (root / "same").write_bytes(b"same bytes")
+        (a / "different").write_bytes(b"old")
+        (b / "different").write_bytes(b"new")
+        self.offline.add("b")
+        self.assertIn("do sprawdzenia 2 plików", self._run("--mode", "full", expected=3))
+        _, report = self._report()
+        details = report["szczegóły"]
+        audit_id = details["ID audytu"]
+        self.assertEqual([target["pełny skan"] for target in details["Nośniki"]], [True, False])
+        self.assertEqual(details["Różnice"], [])
+        original_reads = details["Odczyty SHA-256"]
+
+        self.offline = {"a"}
+        self._cli("--resume", audit_id, expected=4)
+        _, report = self._report()
+        details = report["szczegóły"]
+        self.assertEqual(details["ID audytu"], audit_id)
+        self.assertEqual(details["Zgodne pliki SHA-256"], 1)
+        self.assertEqual(details["Różnice"], [{"rodzaj": "inna treść", "ścieżka": "different"}])
+        self.assertEqual([item for item in details["Odczyty SHA-256"] if item["nośnik"] == "a"], original_reads)
+        with open_database(self.config.app.database_file) as connection:
+            self.assertEqual(connection.exec_driver_sql(
+                "SELECT count(*) FROM history_observations WHERE run_id = ?", (audit_id,),
+            ).scalar_one(), 4)
+            self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM history_verifications").scalar_one(), 0)
+
+    def test_full_audit_resumes_after_interrupt_and_rehashes_changed_file_only(self) -> None:
+        self.offline.add("b")
+        a = self.archives["a"]
+        for name in ("changed", "kept", "pending"):
+            (a / name).write_bytes(b"old")
+
+        def interrupt(source, path, **kwargs):
+            if path == Path("pending"):
+                raise KeyboardInterrupt
+            return hash_source_file(source, path, **kwargs)
+
+        with patch("media_archive.full_audit.hash_source_file", side_effect=interrupt):
+            self._run("--mode", "full", expected=130)
+        _, report = self._report()
+        details = report["szczegóły"]
+        audit_id = details["ID audytu"]
+        self.assertEqual({item["ścieżka"] for item in details["Odczyty SHA-256"]}, {"changed", "kept"})
+        self.assertEqual(details["Błędy skanowania"], [])
+        self.assertEqual(details["Nośniki"][0]["pliki do odczytu"], 1)
+        self.assertIn("uwaga", details["Nośniki"][1])
+        (a / "changed").write_bytes(b"new bytes")
+
+        with patch("media_archive.full_audit.hash_source_file", wraps=hash_source_file) as reads:
+            self._cli("--resume", audit_id, expected=3)
+        self.assertEqual([call.args[1] for call in reads.call_args_list], [Path("changed"), Path("pending")])
+        with open_database(self.config.app.database_file) as connection:
+            self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM audit_checkpoints").scalar_one(), 3)
+            self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM history_observations").scalar_one(), 4)
+
+    def test_full_audit_rechecks_checkpoint_after_listing(self) -> None:
+        a, b = self.archives.values()
+        for root in (a, b):
+            (root / "file").write_bytes(b"old")
+        self._run("--mode", "full")
+        _, report = self._report()
+        audit_id = report["szczegóły"]["ID audytu"]
+        list_directory = LocalSource.list_directory
+
+        def change_after_listing(source, path):
+            entries = list_directory(source, path)
+            if source.physical_device == self.physical_devices["a"]:
+                # Replacement guarantees a different inode even when timestamps are coarse.
+                replacement = a / "replacement"
+                replacement.write_bytes(b"new")
+                replacement.replace(a / "file")
+            return entries
+
+        with patch.object(LocalSource, "list_directory", new=change_after_listing):
+            self._cli("--resume", audit_id, expected=4)
+        _, report = self._report()
+        details = report["szczegóły"]
+        self.assertEqual(details["Zgodne pliki SHA-256"], 0)
+        self.assertEqual(details["Różnice"], [{"rodzaj": "inna treść", "ścieżka": "file"}])
+
+    def test_full_audit_write_failure_reports_id_and_saved_progress(self) -> None:
+        for root in self.archives.values():
+            for name in ("first", "second"):
+                (root / name).touch()
+
+        def save_or_fail(connection, run_id, position, volume_id, root, path, *evidence):
+            if path == Path("second"):
+                raise StateError("Symulowany błąd zapisu punktu wznowienia.")
+            return save_checkpoint(connection, run_id, position, volume_id, root, path, *evidence)
+
+        with patch("media_archive.full_audit.save_checkpoint", side_effect=save_or_fail):
+            self._run("--mode", "full", expected=3)
+        _, report = self._report()
+        details = report["szczegóły"]
+        self.assertIn("Symulowany błąd", details["Błąd zapisu stanu"])
+        self.assertEqual([item["ścieżka"] for item in details["Odczyty SHA-256"]], ["first"])
+        self.assertEqual(details["Błędy skanowania"], [])
+        self.assertEqual(details["Różnice"], [])
+        self.assertEqual(details["Nośniki"][0]["pliki do odczytu"], 1)
+        self.assertEqual(details["Nośniki"][1]["katalogi do przeskanowania"], 1)
+        with patch("media_archive.full_audit.hash_source_file", wraps=hash_source_file) as reads:
+            self._cli("--resume", details["ID audytu"])
+        self.assertEqual([call.args[1] for call in reads.call_args_list],
+                         [Path("second"), Path("first"), Path("second")])
+
+    def test_full_audit_requires_disk_independence_and_rechecks_missing_paths(self) -> None:
+        self.hardware = {"a": (), "b": ()}
+        a, b = self.archives.values()
+        for root in (a, b):
+            (root / "file").write_bytes(b"same")
+        self.offline = {"b"}
+        self._run("--mode", "full", expected=3)
+        _, report = self._report()
+        audit_id = report["szczegóły"]["ID audytu"]
+        self.offline = {"a"}
+        self.assertIn("Nie potwierdzono odrębności", self._cli("--resume", audit_id, expected=3))
+        self.offline.clear()
+        self._cli("--resume", audit_id)
+
+        (a / "file").unlink()
+        self._cli("--resume", audit_id, expected=4)
+        _, report = self._report()
+        self.assertEqual(report["szczegóły"]["Różnice"], [{"rodzaj": "tylko drugi nośnik", "ścieżka": "file"}])
+        with open_database(self.config.app.database_file) as connection:
+            self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM audit_checkpoints").scalar_one(), 1)
+
+    def test_full_audit_read_failure_invalidates_a_previous_hash(self) -> None:
+        a, b = self.archives.values()
+        for root in (a, b):
+            (root / "file").write_bytes(b"same")
+        self._run("--mode", "full")
+        _, report = self._report()
+        audit_id = report["szczegóły"]["ID audytu"]
+        (a / "file").write_bytes(b"changed")
+
+        def fail_read(source, path, **kwargs):
+            if source.physical_device == self.physical_devices["a"]:
+                raise StateError("Symulowany błąd odczytu pliku.")
+            return hash_source_file(source, path, **kwargs)
+
+        with patch("media_archive.full_audit.hash_source_file", side_effect=fail_read):
+            self._cli("--resume", audit_id, expected=3)
+        _, report = self._report()
+        details = report["szczegóły"]
+        self.assertEqual(details["Zgodne pliki SHA-256"], 0)
+        self.assertEqual([item["nośnik"] for item in details["Odczyty SHA-256"]], ["b"])
+        self.assertEqual(details["Błędy skanowania"][0]["ścieżka"], "file")
+        with open_database(self.config.app.database_file) as connection:
+            self.assertEqual(connection.exec_driver_sql("SELECT position FROM audit_checkpoints").scalar_one(), 2)

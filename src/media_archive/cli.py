@@ -8,6 +8,7 @@ import sys
 from media_archive import operations
 from media_archive.audit import quick_audit
 from media_archive.config import ConfigError, load_config
+from media_archive.full_audit import full_audit
 from media_archive.reports import Report, write_report
 from media_archive.state import DatabasePublishedError, DeviceKey, StateError
 from media_archive.state.snapshots import SnapshotPublishedError, create_snapshot, restore_snapshot, validate_snapshot
@@ -38,7 +39,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="media-archive",
         description="Lokalne narzędzie do importu, porządkowania i archiwizacji mediów.",
-        epilog="Dostępny jest szybki AUDIT. IMPORT, SORT i BACKUP nie są jeszcze zaimplementowane.",
+        epilog="Dostępny jest szybki i pełny AUDIT. IMPORT, SORT i BACKUP nie są jeszcze zaimplementowane.",
     )
     parser.add_argument("--config", metavar="PLIK", help="plik konfiguracji (domyślnie .env)")
     parser.add_argument("--check-config", action="store_true", help="sprawdź sam plik konfiguracji")
@@ -56,10 +57,11 @@ def _parser() -> argparse.ArgumentParser:
     restore = commands.add_parser("restore", help="przywróć bazę z generacji")
     restore.add_argument("generation", type=Path, metavar="GENERACJA")
     restore.add_argument("--yes", action="store_true", help="potwierdź przywrócenie bazy")
-    audit = commands.add_parser("audit", help="porównaj ścieżki, typy i rozmiary na dwóch nośnikach")
-    audit.add_argument("--group", required=True, metavar="GRUPA")
-    audit.add_argument("--targets", required=True, nargs=2, metavar=("PIERWSZY", "DRUGI"))
-    audit.add_argument("--mode", choices=("quick",), default="quick")
+    audit = commands.add_parser("audit", help="porównaj metadane lub SHA-256 dwóch nośników")
+    audit.add_argument("--group", metavar="GRUPA")
+    audit.add_argument("--targets", nargs=2, metavar=("PIERWSZY", "DRUGI"))
+    audit.add_argument("--mode", choices=("quick", "full"))
+    audit.add_argument("--resume", metavar="ID_AUDYTU", help="wznów pełny audyt z zapisanej bazy")
     device = commands.add_parser("device", help="sprawdź lub jawnie zarejestruj wolumin")
     actions = device.add_subparsers(dest="device_action", required=True)
     for action, help_text in (
@@ -87,6 +89,14 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         parser.error("Użyj setup --dry-run, aby zobaczyć plan, albo setup --yes, aby go wykonać.")
     if args.command == "restore" and (args.config is None or not args.yes):
         parser.error("Użyj --config PLIK restore GENERACJA --yes.")
+    if args.command == "audit":
+        if args.resume is not None:
+            if args.group is not None or args.targets is not None or args.mode == "quick":
+                parser.error("Użyj audit --resume ID_AUDYTU, aby wznowić zapisany pełny audyt.")
+        elif args.group is None or args.targets is None:
+            parser.error("Nowy audyt wymaga --group GRUPA --targets PIERWSZY DRUGI.")
+        if args.dry_run and (args.resume is not None or args.mode == "full"):
+            parser.error("Pełny audyt zapisuje postęp w bazie i nie obsługuje --dry-run.")
     if args.command == "verify-snapshot":
         try:
             generation = validate_snapshot(args.generation.absolute())
@@ -140,7 +150,11 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             else:
                 message = "Zapisano zatwierdzoną zmianę rejestru."
         elif args.command == "audit":
-            outcome = quick_audit(config, args.group, *args.targets, dry_run=dry_run)
+            if args.mode == "full" or args.resume is not None:
+                outcome = full_audit(config, args.group, args.targets, resume=args.resume,
+                                     announce=lambda message: print(message, file=sys.stderr, flush=True))
+            else:
+                outcome = quick_audit(config, args.group, *args.targets, dry_run=dry_run)
             code, message, details = outcome.code, outcome.message, outcome.details
         else:
             if args.command == "resume" and not dry_run:

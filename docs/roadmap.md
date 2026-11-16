@@ -38,7 +38,7 @@ This stage provides inventory primitives, not media transfers.
 ## Stage 3 — First operational feature: AUDIT and initialization
 
 - [x] **3.1 Quick inventories and comparison.** Compare two selected registered archive roots by paths, types and sizes, report differences and incomplete scopes, and record presence observations. See [quick audit](audit.md).
-- [ ] **3.2 Full resumable AUDIT.** Hash contents with checkpoints, progress and sequential disk attachment. Revalidate changed files after resuming; report exactly which scope was verified.
+- [x] **3.2 Full resumable AUDIT.** Compare SHA-256 with per-file SQLite checkpoints, progress and sequential disk attachment. Revalidate attached volumes on resume and report read times and incomplete scopes. See [full audit](audit.md#full-sha-256-audit).
 - [ ] **3.2a Explicit copy repair.** Deliver after the shared verified-transfer mechanism in 4.1. Present a verified source and exact destination for approval, including recovery from a surviving archive copy after local removal. See [repair design](design/archive-workflows.md#explicit-copy-repair).
 - [ ] **3.3 Initial existing-data inventory.** Record local collections and all required archives, preserving progress while disks are offline. Existing files are observations, not fabricated successful imports. No automatic reorganization of existing collections.
 - [ ] **3.4 Source baseline initialization.** Persist the scope/boundary of a phone baseline; apply `baseline_skip_missing` only when comparison is complete. Phone-only baseline content may be skipped, never marked imported or archived. `import_missing` fills initial gaps; subsequent imports share incremental history behavior. Camera sources do not inherit the phone baseline exception.

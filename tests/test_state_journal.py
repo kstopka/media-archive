@@ -96,7 +96,7 @@ class StateJournalTests(unittest.TestCase):
                 content = history.record_content(connection, HASH, 42)
                 occurrence = history.record_occurrence(connection, "staging", "/stage/example", content_id=content)
                 proof = self.proof(connection, run, occurrence)
-        self.assertEqual(migrate_database(self.path), "0006")
+        self.assertEqual(migrate_database(self.path), "0007")
         with open_database(self.path) as connection:
             self.assertEqual(history.load_verifications(connection, occurrence)[0].id, proof)
             self.assertEqual(journal.load_unfinished(connection), ())

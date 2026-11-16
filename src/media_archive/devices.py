@@ -60,12 +60,16 @@ def _volume_settings(config: Configuration, key: DeviceKey, target: Path | None)
     raise ConfigError("Wskaż skonfigurowany wolumin, jego UUID i właściwą ścieżkę montowania.")
 
 
+class VolumeUnavailable(StateError):
+    """The configured mount point is currently unmounted."""
+
+
 def _rows(command: list[str], key: str) -> list[dict[str, object]]:
     try:
         result = subprocess.run(command, capture_output=True, encoding="utf-8", timeout=10, check=False)
         if result.returncode:
             if command[0] == "findmnt" and result.returncode == 1 and not result.stderr:
-                raise StateError("Pod wskazaną ścieżką nie ma oczekiwanego montowania.")
+                raise VolumeUnavailable("Pod wskazaną ścieżką nie ma oczekiwanego montowania.")
             raise StateError("Narzędzie Linuksa nie mogło sprawdzić nośnika.")
         rows = json.loads(result.stdout)[key]
         if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):

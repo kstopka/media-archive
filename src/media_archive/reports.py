@@ -39,7 +39,7 @@ class Report:
                     lines.append(f"Operacja {item['id_operacji']} · {item['stan']} · uruchomienie {item['id_uruchomienia'] or '—'}")
                     if "następny_krok" in item:
                         lines.append(item["następny_krok"])
-            elif self.command == "audit" and key in ("Różnice", "Błędy skanowania", "Odczytane katalogi"):
+            elif self.command == "audit" and key in ("Różnice", "Błędy skanowania", "Odczytane katalogi", "Odczyty SHA-256"):
                 if not summary_only and value:
                     lines.append(key)
                     lines.extend(f"- {item}" for item in value)

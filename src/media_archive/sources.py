@@ -98,6 +98,10 @@ class LocalSource:
     def physical_device(self) -> str:
         return self._volume.physical_device
 
+    @property
+    def hardware_ids(self) -> tuple[str, ...]:
+        return self._volume.hardware_ids
+
     def list_directory(self, path: Path = Path(".")) -> tuple[SourceEntry, ...]:
         path = _relative(path)
         with _media_descriptor(self._volume, path, self._scope) as descriptor:
@@ -303,10 +307,13 @@ def _check_cancelled(cancelled: Callable[[], bool] | None) -> None:
 
 def hash_source_file(source: LocalSource | AdbSource, path: Path, *,
                      progress: Callable[[int, int], None] | None = None,
-                     cancelled: Callable[[], bool] | None = None) -> SourceDigest:
+                     cancelled: Callable[[], bool] | None = None,
+                     expected: SourceEntry | None = None) -> SourceDigest:
     """Return SHA-256 and byte count after a complete read and matching attributes."""
     _check_cancelled(cancelled)
     before = source.attributes(path)
+    if expected is not None and before != expected:
+        raise StateError("Plik źródłowy zmienił się od inwentaryzacji.")
     if not stat.S_ISREG(before.mode):
         raise StateError("Haszowanie wymaga zwykłego pliku źródłowego.")
     if progress is not None:

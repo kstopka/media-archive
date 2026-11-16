@@ -7,7 +7,7 @@ from pathlib import Path
 import stat
 import unicodedata
 
-from media_archive.config import ConfigError, Configuration
+from media_archive.config import ArchiveGroup, ArchiveTarget, ConfigError, Configuration
 from media_archive.devices import registered_volume
 from media_archive.sources import LocalSource, SourceEntry, open_local_source
 from media_archive.state import DeviceKey, StateError, open_database, transaction, validate_registered_configuration
@@ -58,14 +58,16 @@ def _compare(first: _Scan, second: _Scan) -> tuple[int, list[dict[str, object]]]
     differences: list[dict[str, object]] = []
     equal = 0
     names: dict[str, list[str]] = {}
+    first_pending, second_pending = set(first.pending), set(second.pending)
     for path in sorted(first.entries.keys() | second.entries.keys()):
         name = path.as_posix()
         names.setdefault(unicodedata.normalize("NFC", name).casefold(), []).append(name)
         a, b = first.entries.get(path), second.entries.get(path)
         if a is None or b is None:
-            if a is None and first.covers(path):
+            scope = (path, *path.parents)
+            if a is None and first.covers(path) and not first_pending.intersection(scope):
                 differences.append({"rodzaj": "tylko drugi nośnik", "ścieżka": name})
-            if b is None and second.covers(path):
+            if b is None and second.covers(path) and not second_pending.intersection(scope):
                 differences.append({"rodzaj": "tylko pierwszy nośnik", "ścieżka": name})
             continue
         type_a, type_b = stat.S_IFMT(a.mode), stat.S_IFMT(b.mode)
@@ -97,9 +99,8 @@ def _write_observations(config: Configuration, root: Path, targets: dict[DeviceK
     return run
 
 
-def quick_audit(config: Configuration, group_id: str, first: str, second: str, *,
-                dry_run: bool = False) -> QuickAudit:
-    """Run a metadata-only comparison with explicit coverage and presence observations."""
+def _select_targets(config: Configuration, group_id: str, first: str, second: str,
+                    ) -> tuple[ArchiveGroup, tuple[ArchiveTarget, ArchiveTarget]]:
     try:
         group = config.archive_group(group_id)
         selected = (group.target(first), group.target(second))
@@ -107,6 +108,13 @@ def quick_audit(config: Configuration, group_id: str, first: str, second: str, *
         raise ConfigError("Wybierz zarejestrowaną grupę i dwa cele archiwalne w tej grupie.") from None
     if first == second:
         raise ConfigError("Audyt wymaga dwóch różnych celów archiwalnych.")
+    return group, selected
+
+
+def quick_audit(config: Configuration, group_id: str, first: str, second: str, *,
+                dry_run: bool = False) -> QuickAudit:
+    """Run a metadata-only comparison with explicit coverage and presence observations."""
+    group, selected = _select_targets(config, group_id, first, second)
 
     root = Path(group.root_relative)
     targets = {DeviceKey("archive", target.alias, group.id): _Scan() for target in selected}
