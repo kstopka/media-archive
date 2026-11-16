@@ -336,6 +336,32 @@ def load_imports(connection: Connection, source_id: int) -> tuple[RowMapping, ..
     ).mappings())
 
 
+def load_imported_contents(connection: Connection, source_id: int) -> dict[tuple[str, int], int]:
+    """Map content to its latest successful import in this source profile."""
+    rows = connection.execute(
+        select(history.contents.c.sha256, history.contents.c.size, history.imports.c.id)
+        .select_from(history.imports)
+        .join(history.occurrences, history.imports.c.source_occurrence_id == history.occurrences.c.id)
+        .join(history.contents, history.occurrences.c.content_id == history.contents.c.id)
+        .where(history.occurrences.c.source_id == source_id).order_by(history.imports.c.id)
+    )
+    return {(digest, size): import_id for digest, size, import_id in rows}
+
+
+def load_baseline_contents(connection: Connection, run_id: str, source_id: int,
+                           ) -> dict[int, tuple[str, int, str]]:
+    """Map a profile's observed baseline occurrence IDs to content identities and paths."""
+    rows = connection.execute(
+        select(history.occurrences.c.id, history.contents.c.sha256, history.contents.c.size, history.occurrences.c.path)
+        .select_from(history.observations)
+        .join(history.occurrences, history.observations.c.occurrence_id == history.occurrences.c.id)
+        .join(history.contents, history.occurrences.c.content_id == history.contents.c.id)
+        .where(history.observations.c.run_id == run_id, history.observations.c.present.is_(True),
+               history.occurrences.c.kind == "source", history.occurrences.c.source_id == source_id)
+    )
+    return {occurrence_id: (digest, size, path) for occurrence_id, digest, size, path in rows}
+
+
 def load_placement(connection: Connection, import_id: int) -> RowMapping | None:
     return find(connection, history.placements, import_id=import_id)
 

@@ -12,6 +12,7 @@ from time import monotonic
 
 from sqlalchemy.engine import Connection
 
+from media_archive._media_formats import PHONE_MEDIA, media_extension
 from media_archive.audit import _Scan, _scan
 from media_archive.config import ArchiveGroup, ConfigError, Configuration, PhoneProfile
 from media_archive.devices import registered_volume
@@ -70,7 +71,9 @@ def _capture(config: Configuration, phone: PhoneProfile, source_id: int, connect
         if scan.errors:
             raise StateError("Nie ukończono listowania katalogu telefonu: " + next(iter(scan.errors.values())))
         regular = [entry for entry in scan.entries.values() if stat.S_ISREG(entry.mode)]
-        total = sum(entry.size for entry in regular)
+        supported = [entry for entry in regular if media_extension(entry.path) in PHONE_MEDIA]
+        unsupported = [entry.path.as_posix() for entry in regular if media_extension(entry.path) not in PHONE_MEDIA]
+        total = sum(entry.size for entry in supported)
         done = 0
         last = monotonic()
 
@@ -78,11 +81,11 @@ def _capture(config: Configuration, phone: PhoneProfile, source_id: int, connect
             nonlocal last
             now = monotonic()
             if now - last >= 1:
-                announce(f"Telefon {phone.alias} · pliki {len(files)}/{len(regular)} · bajty {done + read}/{total}")
+                announce(f"Telefon {phone.alias} · pliki {len(files)}/{len(supported)} · bajty {done + read}/{total}")
                 last = now
 
-        announce(f"Telefon {phone.alias} · do odczytu {len(regular)} plików, {total} bajtów.")
-        for entry in regular:
+        announce(f"Telefon {phone.alias} · do odczytu {len(supported)} plików, {total} bajtów.")
+        for entry in supported:
             digest = hash_source_file(source, entry.path, expected=entry, progress=progress)
             files.append((entry, digest, datetime.now(timezone.utc)))
             done += digest.size
@@ -91,7 +94,8 @@ def _capture(config: Configuration, phone: PhoneProfile, source_id: int, connect
         run_id = create_run(connection)
         start_initialization(
             connection, source_id, run_id, policy=phone.initial_policy,
-            boundary=json.dumps({"root": scope.as_posix(), "device_id": device.device_id}, ensure_ascii=False),
+            boundary=json.dumps({"root": scope.as_posix(), "device_id": device.device_id, "unsupported": unsupported},
+                                ensure_ascii=False),
             comparison_scopes=("copies",), processing_scopes=("baseline",),
             baseline_device_id=device.device_id if phone.initial_policy == "baseline_skip_missing" else None,
         )
@@ -241,6 +245,11 @@ def initialize_phone(config: Configuration, profile: str, *, audit_id: str | Non
                 code, message = 130, "Przerwano inicjalizację telefonu."
             except StateError as error:
                 message = "Inicjalizacja telefonu oczekuje: " + str(error)
+            if state.boundary is not None:
+                unsupported = json.loads(state.boundary).get("unsupported", [])
+                if unsupported:
+                    details["Liczba nieobsługiwanych plików telefonu"] = len(unsupported)
+                    details["Nieobsługiwane pliki telefonu"] = unsupported
             details.update({"Stan inicjalizacji": state.status, "Polityka": state.policy or phone.initial_policy,
                             "ID spisu telefonu": state.started_run_id})
     return PhoneInitializationResult(code, message, details)

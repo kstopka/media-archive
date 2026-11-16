@@ -12,6 +12,7 @@ from unittest.mock import patch
 from media_archive.cli import main
 from media_archive.config import load_config
 from media_archive.devices import MountedVolume, VolumeUnavailable, _mount_id
+from media_archive.import_planning import plan_import
 from media_archive.sources import LocalSource
 from media_archive.state import DeviceKey, StateError, open_database
 from media_archive.state.history import load_source_id, record_observation
@@ -244,6 +245,17 @@ class InventoryTests(unittest.TestCase):
         rows = {Path(item["ścieżka"]).name: item for item in result["Decyzje spisu telefonu"]}
         self.assertEqual(len(rows["existing.jpg"]["odczyty archiwalne"]), 2)
         self.assertEqual(rows["previously-selected.jpg"]["odczyty archiwalne"], [])
+        with patch("media_archive.import_planning.verify_volume",
+                   side_effect=lambda config, key, **kwargs: self._verify(config, key, None)):
+            with patch("media_archive.import_planning.open_adb_source", return_value=self._phone_source(root)):
+                plan = plan_import(self.config, "main")
+            with patch("media_archive.import_planning.open_adb_source", return_value=self._phone_source(root)):
+                reimport = plan_import(self.config, "main", reimport=["previously-selected.jpg"])
+        self.assertTrue(plan.ready)
+        self.assertEqual({item.relative_path.name: item.decision for item in plan.items},
+                         {"existing.jpg": "existing_baseline", "previously-selected.jpg": "baseline_skip",
+                          "new.jpg": "copy"})
+        self.assertEqual({item.decision for item in reimport.transfers}, {"copy", "reimport"})
         with open_database(self.config.app.database_file) as connection:
             source_id = load_source_id(connection, "phone", "main")
             self.assertEqual(load_initialization(connection, source_id).status, "completed")
@@ -255,6 +267,7 @@ class InventoryTests(unittest.TestCase):
         root.mkdir()
         (root / "local.jpg").write_bytes(b"local")
         (root / "archive.jpg").write_bytes(b"archive")
+        (root / "unsupported.GIF").write_bytes(b"unhandled format")
         (self.config.collection("photos_secondary").local_root / "present.jpg").write_bytes(b"local")
         self._archive_copy("photos_secondary", "archive.jpg", b"archive")
         self._cli("inventory", "--hash-local")
@@ -262,9 +275,21 @@ class InventoryTests(unittest.TestCase):
         with patch("media_archive.phone_initialization.open_adb_source", return_value=self._phone_source(root)):
             result = self._cli("init-phone", "secondary", "--audit", audit["ID audytu"], expected=3)
         self.assertEqual((result["Rozpoznane pliki"], result["Pominięcia bazowe"], result["Braki lokalne"]), (1, 0, 1))
+        self.assertEqual(result["Nieobsługiwane pliki telefonu"], ["unsupported.GIF"])
         rows = {Path(item["ścieżka"]).name: item for item in result["Decyzje spisu telefonu"]}
         self.assertEqual(len(rows["archive.jpg"]["odczyty archiwalne"]), 2)
         self.assertEqual(len(rows["local.jpg"]["lokalne wystąpienia"]), 1)
+        (root / "new.jpg").write_bytes(b"after baseline")
+        (root / "a-copy.jpg").write_bytes(b"archive")
+        with (patch("media_archive.import_planning.verify_volume",
+                    side_effect=lambda config, key, **kwargs: self._verify(config, key, None)),
+              patch("media_archive.import_planning.open_adb_source", return_value=self._phone_source(root))):
+            plan = plan_import(self.config, "secondary")
+        self.assertEqual([item.relative_path.name for item in plan.transfers], ["archive.jpg"])
+        decisions = {item.relative_path.name: item.decision for item in plan.items}
+        self.assertEqual(decisions["new.jpg"], "awaiting_initialization")
+        self.assertEqual(decisions["a-copy.jpg"], "awaiting_initialization")
+        self.assertEqual(decisions["unsupported.GIF"], "unsupported")
         with open_database(self.config.app.database_file) as connection:
             source_id = load_source_id(connection, "phone", "secondary")
             state = load_initialization(connection, source_id)

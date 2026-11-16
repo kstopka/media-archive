@@ -9,6 +9,7 @@ from media_archive import operations
 from media_archive.audit import quick_audit
 from media_archive.config import ConfigError, load_config
 from media_archive.full_audit import full_audit
+from media_archive.import_planning import ImportPlan, plan_import
 from media_archive.inventory import inventory
 from media_archive.phone_initialization import initialize_phone
 from media_archive.reports import Report, write_report
@@ -37,11 +38,39 @@ def _device_key(value: str) -> DeviceKey:
     raise argparse.ArgumentTypeError("Użyj card:ALIAS, local:ALIAS albo archive:GRUPA:ALIAS.")
 
 
+_IMPORT_DECISIONS = {
+    "copy": "do skopiowania", "reimport": "do ponownego importu", "already_imported": "już zaimportowano",
+    "existing_baseline": "kopia rozpoznana w spisie bazowym", "baseline_skip": "pominięcie bazowe",
+    "duplicate": "duplikat w tej partii", "awaiting_initialization": "oczekuje na inicjalizację",
+    "ignored": "pominięty format", "unsupported": "nieobsługiwany wpis", "unreadable": "błąd odczytu",
+    "destination_conflict": "cel już istnieje",
+}
+
+
+def _import_details(plan: ImportPlan) -> dict[str, object]:
+    details: dict[str, object] = {
+        "Profil źródła": plan.profile, "Pliki do importu": len(plan.transfers),
+        "Wymagane bajty na stagingu": plan.required_bytes, "Rezerwa stagingu w bajtach": plan.reserve_bytes,
+    }
+    if plan.available_bytes is not None:
+        details["Wolne bajty na stagingu"] = plan.available_bytes
+    if plan.problems:
+        details["Przyczyny blokady"] = plan.problems
+    details["Manifest importu"] = [
+        {"ścieżka": item.relative_path.as_posix(), "bajty": item.size, "sha256": item.sha256,
+         "decyzja": _IMPORT_DECISIONS[item.decision],
+         "staging": item.destination.as_posix() if item.destination is not None else None}
+        for item in plan.items
+    ]
+    return details
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="media-archive",
         description="Lokalne narzędzie do importu, porządkowania i archiwizacji mediów.",
-        epilog="Dostępny jest AUDIT i pierwszy spis. IMPORT, SORT i BACKUP nie są jeszcze zaimplementowane.",
+        epilog="Dostępny jest AUDIT, pierwszy spis i plan importu. Polecenia wykonujące IMPORT, SORT i BACKUP "
+               "nie są jeszcze zaimplementowane.",
     )
     parser.add_argument("--config", metavar="PLIK", help="plik konfiguracji (domyślnie .env)")
     parser.add_argument("--check-config", action="store_true", help="sprawdź sam plik konfiguracji")
@@ -69,6 +98,12 @@ def _parser() -> argparse.ArgumentParser:
     phone_init = commands.add_parser("init-phone", help="zapisz lub porównaj pierwszy spis telefonu")
     phone_init.add_argument("profile", metavar="PROFIL")
     phone_init.add_argument("--audit", metavar="ID_AUDYTU", help="użyj zapisanego pełnego audytu właściwej pary")
+    import_parser = commands.add_parser("import", help="pokaż plan importu bez kopiowania")
+    import_parser.add_argument("--source", required=True, metavar="PROFIL")
+    import_parser.add_argument("--card", metavar="KARTA")
+    import_parser.add_argument("--mount", type=Path, metavar="KATALOG")
+    import_parser.add_argument("--reimport", action="append", default=[], metavar="ŚCIEŻKA",
+                               help="zaplanuj ponowny import wskazanego pliku względnie do katalogu źródła")
     device = commands.add_parser("device", help="sprawdź lub jawnie zarejestruj wolumin")
     actions = device.add_subparsers(dest="device_action", required=True)
     for action, help_text in (
@@ -80,7 +115,7 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--to", type=Path, metavar="KATALOG", required=action in ("replace", "reformat"))
         if action != "check":
             command.add_argument("--yes", action="store_true", help="zapisz sprawdzoną zmianę w rejestrze")
-    for command in (setup, migrate, resume, audit):
+    for command in (setup, migrate, resume, audit, import_parser):
         command.add_argument("--dry-run", action="store_true", help="pokaż plan bez zapisu stanu")
         command.add_argument("--report", action="store_true", help="zapisz raport tekstowy i JSON")
     return parser
@@ -96,6 +131,8 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         parser.error("Użyj setup --dry-run, aby zobaczyć plan, albo setup --yes, aby go wykonać.")
     if args.command == "restore" and (args.config is None or not args.yes):
         parser.error("Użyj --config PLIK restore GENERACJA --yes.")
+    if args.command == "import" and not args.dry_run:
+        parser.error("Na tym etapie IMPORT udostępnia import --source PROFIL --dry-run.")
     if args.command == "audit":
         if args.resume is not None:
             if args.group is not None or args.targets is not None or args.mode == "quick":
@@ -128,7 +165,8 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         args.command in ("setup", "migrate", "audit", "inventory", "init-phone") and not dry_run
     )
     try:
-        operations.check_application_paths(config, reports=save_report, device_mount=getattr(args, "to", None))
+        operations.check_application_paths(config, reports=save_report,
+                                           device_mount=getattr(args, "mount", getattr(args, "to", None)))
     except StateError as error:
         print(f"Błąd wykonania: {error}", file=sys.stderr)
         return 1
@@ -173,6 +211,12 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             outcome = initialize_phone(config, args.profile, audit_id=args.audit,
                                        announce=lambda message: print(message, file=sys.stderr, flush=True))
             code, message, details = outcome.code, outcome.message, outcome.details
+        elif args.command == "import":
+            plan = plan_import(config, args.source, card=args.card, mount=args.mount, reimport=args.reimport,
+                               announce=lambda message: print(message, file=sys.stderr, flush=True))
+            code = 0 if plan.ready else 3
+            message = "Plan importu gotowy." if plan.ready else "Plan importu jest zablokowany."
+            details = _import_details(plan)
         else:
             if args.command == "resume" and not dry_run:
                 raise StateError("Wznowienie transferu będzie dostępne po wdrożeniu operacji na plikach. "
@@ -191,7 +235,7 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     except StateError as error:
         report = Report(args.command, 1, f"Błąd wykonania: {error}", dry_run)
 
-    print(report.render(summary_only=args.command in ("audit", "inventory", "init-phone") and save_report), end="",
+    print(report.render(summary_only=args.command in ("audit", "inventory", "init-phone", "import") and save_report), end="",
           file=sys.stderr if report.code else sys.stdout)
     if save_report:
         try:

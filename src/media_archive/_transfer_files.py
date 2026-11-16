@@ -59,7 +59,7 @@ class Destination:
     path: Path  # disk-relative
 
     @contextmanager
-    def _parents(self, *, create: bool = False) -> Generator[list[int], None, None]:
+    def _parents(self, *, create: bool = False, nearest: bool = False) -> Generator[list[int], None, None]:
         with ExitStack() as stack:
             try:
                 root = _open_root(stack, self.volume.root, self.volume.mount_id)
@@ -74,6 +74,8 @@ class Destination:
                 try:
                     child = os.open(part, _DIRECTORY, dir_fd=parent)
                 except FileNotFoundError:
+                    if nearest:
+                        break
                     if not create:
                         raise
                     try:
@@ -110,6 +112,32 @@ class Destination:
         except FileNotFoundError:
             return
         raise TransferConflict("Plik docelowy już istnieje. Pozostawiono go bez zmian.")
+
+    def preflight(self) -> tuple[Path, ...]:
+        """Check the writable directory for the next creation and list missing parents."""
+        parts = self.path.parent.parts
+        with self._parents(nearest=True) as directories:
+            parent = directories[-1]
+            depth = len(directories) - 1
+            if depth == len(parts):
+                try:
+                    os.stat(self.path.name, dir_fd=parent, follow_symlinks=False)
+                except FileNotFoundError:
+                    pass
+                else:
+                    raise TransferConflict("Plik docelowy już istnieje. Pozostawiono go bez zmian.")
+            if not os.access(f"/proc/self/fd/{parent}", os.W_OK | os.X_OK, effective_ids=True):
+                raise StateError("Brak prawa zapisu w katalogu wymaganym przez transfer do stagingu.")
+            return tuple(Path(*parts[:index]) for index in range(depth + 1, len(parts) + 1))
+
+    def space(self) -> tuple[int, int]:
+        """Return available bytes and allocation unit at an existing ancestor of the target."""
+        with self._parents(nearest=True) as directories:
+            info = os.fstatvfs(directories[-1])
+            unit = info.f_frsize or info.f_bsize
+            if unit <= 0 or info.f_bavail < 0:
+                raise StateError("Nie można wiarygodnie oszacować miejsca na stagingu.")
+            return info.f_bavail * unit, unit
 
     def recover_digest(self) -> SourceDigest | None:
         """Return fresh proof of an existing regular file, or confirmed absence."""

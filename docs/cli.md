@@ -19,6 +19,7 @@ Use `media-archive` or `python -m media_archive`. Put `--config FILE` before the
 | `audit --resume AUDIT_ID` | Resume a saved full audit on the same registered volumes. |
 | `inventory [--hash-local]` | Build or resume the [initial inventory](inventory.md); optionally read local SHA-256. |
 | `init-phone PROFILE [--audit AUDIT_ID]` | Capture a [phone baseline](phone-initialization.md) or compare it using a completed full audit. |
+| `import --source PROFILE --dry-run [--card CARD --mount DIRECTORY] [--reimport RELATIVE_PATH] [--report]` | Show the [import plan](import-planning.md), decisions and staging preflight without copying. |
 | `pending` | List unfinished journal operations and their latest attempt states. A listed operation may still have a live owner. |
 | `resume ID --dry-run` | Show the next step for an unfinished operation using its numeric operation ID. Actual file recovery will be available with the transfer workflow. Until then, `resume ID` returns status 1. |
 
@@ -43,7 +44,7 @@ Rotation checks the Media Archive format marker and requires the invocation ID a
 | 0 | Success or completed preview |
 | 1 | Execution error |
 | 2 | Invalid arguments or configuration |
-| 3 | Partial result. An audit, inventory, or phone initialization has pending work or could not save progress, a published database or snapshot could not be confirmed durable, or a completed execution could not save its report. |
+| 3 | Partial or blocked result. An audit, inventory, or phone initialization has pending work, the import plan cannot proceed, a published database or snapshot could not be confirmed durable, or a completed execution could not save its report. |
 | 4 | Audit completed and detected differences in paths, attributes or full-mode SHA-256. |
 | 130 | Interrupted by the operator |
 

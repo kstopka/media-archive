@@ -54,6 +54,7 @@ Paths below are relative to the repository root.
 | [inventory.py](../src/media_archive/inventory.py) | Record the first local and archive inventory in resumable scopes |
 | [phone_initialization.py](../src/media_archive/phone_initialization.py) | Capture a phone baseline and record decisions from saved inventory and full audit evidence |
 | [transfer.py](../src/media_archive/transfer.py) | Execute a planned transfer and reconcile its publication |
+| [import_planning.py](../src/media_archive/import_planning.py) | Build a source manifest, apply profile history and check staging space |
 | [state/database.py](../src/media_archive/state/database.py) | Explicit creation/opening, connection lifetime, short transactions and migration entry point |
 | [state/migrations.py](../src/media_archive/state/migrations.py) | Application identity, Alembic revision validation and migration entry point |
 | [state/registry.py](../src/media_archive/state/registry.py) | Trusted identity reads, configuration checks and explicit registration |
@@ -64,7 +65,7 @@ Paths below are relative to the repository root.
 
 Both `python -m media_archive` and the installed `media-archive` script reach `media_archive.cli.main(argv=None)`.
 
-The [CLI reference](cli.md) describes setup, migrations, device checks and registration, archive audits, initial inventory, phone initialization, read-only journal previews, report storage and exit statuses. Command handlers reuse the configuration loader, state registry and operation journal. Quick audit reads filesystem metadata. Full audit reads file contents and checkpoints in SQLite. The initial inventory records existing files across configured local and archive scopes. The [transfer API](transfer.md) executes a planned copy; the import CLI and planning are separate stages.
+The [CLI reference](cli.md) describes setup, migrations, device checks and registration, archive audits, initial inventory, phone initialization, read-only previews, report storage and exit statuses. Command handlers reuse the configuration loader, state registry and operation journal. Quick audit reads filesystem metadata. Full audit reads file contents and checkpoints in SQLite. The initial inventory records existing files across configured local and archive scopes. The [import planner](import-planning.md) exposes read-only plans through the CLI, and the [transfer API](transfer.md) executes a planned copy. Import execution is a separate stage.
 
 ## Configuration execution
 

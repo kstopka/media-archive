@@ -1,6 +1,6 @@
 # Initial phone inventory
 
-`init-phone PROFILE` records the first complete SHA-256 inventory of the registered phone's configured camera directory through ADB. The first successful pass fixes the list of regular files and their content for this profile. Files added later are outside this baseline. An interrupted or failed phone read does not save a partial baseline: retry the initial phone scan. After the complete baseline is saved, comparison and reporting no longer need access to the phone.
+`init-phone PROFILE` records the first complete SHA-256 inventory of supported regular files in the registered phone's configured camera directory through ADB. It uses the same [format list as import](import-planning.md). Unsupported regular files are reported separately and do not become gaps that block initialization. The first successful pass fixes the paths and content for this profile. Files added later are outside this baseline, even when they have the same content as a recorded file. An interrupted or failed phone read does not save a partial baseline: retry the initial phone scan. After the complete baseline is saved, comparison and reporting no longer need access to the phone.
 
 For example, with profile `phone-a` assigned to the `data` archive group:
 
