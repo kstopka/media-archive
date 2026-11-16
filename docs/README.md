@@ -20,6 +20,7 @@ Current coverage includes the package and CLI, configuration, SQLite lifecycle, 
 | [phone-initialization.md](phone-initialization.md) | Capture a phone baseline, compare content and record initial decisions |
 | [history.md](history.md) | Media occurrences, evidence, archive requirements and initialization |
 | [journal.md](journal.md) | Operation attempts, resource locks and recovery |
+| [transfer.md](transfer.md) | Verified one-file transfer, publication and recovery |
 | [cli.md](cli.md) | Setup, migrations, planning, journal previews and report retention |
 | [snapshots.md](snapshots.md) | Manual state snapshots, validation and restore |
 | [development.md](development.md) | Environment, tests, change locations and documentation maintenance |
@@ -39,6 +40,7 @@ For a configuration change, read the architecture and relevant configuration sec
 | Persistent configuration registration | [Registry API](registration.md) |
 | Media history and initialization | [History API](history.md) |
 | Operation journal and locks | [Journal API](journal.md) |
+| Shared transfer | [Transfer API](transfer.md) |
 
 As features grow, give each feature its own page and register it here. Before creating or editing a feature, read its technical reference and any linked AI-specific instructions. Shared architecture and development rules remain in their existing pages; create additional instruction files only when necessary.
 
@@ -65,6 +67,7 @@ These documents use neutral examples and do not depend on private planning notes
 | Persistent registration | Explicit Python API for identities, bindings, archive destination reservations and hardware changes |
 | Media history and initialization | Python APIs for recording evidence, archive requirements and resumable progress |
 | Operation journal | Python API for durable attempts, recovery and process-held resource locks |
+| Shared transfer | Python API for copying, verifying, publishing and recovering a planned file transfer |
 | State snapshots and restore | CLI and Python APIs for manual generations, validation and restore |
 | AUDIT | Quick metadata comparison and resumable full SHA-256 comparison for two selected archive targets |
 | Initial inventory | Durable local collection and archive scopes, with optional local SHA-256 |

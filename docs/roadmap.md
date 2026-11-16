@@ -47,7 +47,7 @@ After acceptance, inventory/audit can be used without waiting for IMPORT/SORT/BA
 
 ## Stage 4 — IMPORT and verified transfers
 
-- [ ] **4.1 Shared transfer mechanism.** Local/ADB transport, target-filesystem temporary files, independent source/copy hashes and safe publication. Partial transfers must never become completed copies; reconcile publication/database crash windows. ADB may restart a file instead of resuming by byte offset.
+- [x] **4.1 Shared transfer mechanism.** The [transfer API](transfer.md) copies with rsync or ADB, independently verifies a temporary file, publishes without replacing an existing name and reconciles the publication/database crash window. Interrupted parts are retained.
 - [ ] **4.2 Import planning.** Source manifests, observations, per-profile dispositions and staging-space preflight. Hash identity in another profile must not suppress a required distinct occurrence.
 - [ ] **4.3 Camera import.** Videos/photos, configured exclusions, reporting of unsupported types and content recognition despite formatting or reused names. Preserve source cards; reject hash mismatches.
 - [ ] **4.4 Phone import through ADB.** Apply baseline dispositions and import new content, handling authorization/offline states. Preserve phone originals.

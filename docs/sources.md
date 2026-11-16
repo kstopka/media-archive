@@ -37,6 +37,8 @@ Call `hash_source_file(source, path, *, progress=None, cancelled=None, expected=
 
 `progress(bytes_read, total_bytes)` receives zero at the start and the cumulative count after each chunk. A count at 100% can precede a final stream or attribute error. A `cancelled()` callback returning `True` raises `ReadCancelled` at the next checkpoint. Checkpoints run before I/O, between chunks and before returning the digest. A blocked I/O call must return before a callback can be checked. An error or cancellation yields no digest. This function does not write evidence to SQLite. Audit and import workflows decide when to record it.
 
+The [transfer API](transfer.md) can pass an `on_chunk` callback to write the bytes received from the ADB stream into a staged copy. Bytes delivered to that callback are not verification; a successful digest still requires all end-of-read checks. Local sources also expose `open_file(path, expected=...)` to keep the checked descriptor open for rsync.
+
 Attribute checks detect observed changes. An in-place edit on Android can still go undetected if the size and timestamps reported at one-second precision remain the same. A digest describes the bytes actually received during that read.
 
 [Source tests](../tests/test_sources.py) use temporary files and an ADB stand-in that runs the actual generated shell command locally. They cover source boundaries, quoted and non-UTF-8 names, device selection and authorization, empty listings, disconnection and reads with more than 1,024 file descriptors in use. They also verify digests, progress, cancellation, incomplete streams and source replacement. A physical Android phone was not used in these tests.

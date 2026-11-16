@@ -30,6 +30,8 @@ All writes in `media_archive.state.journal` require the active handle yielded by
 
 The usual sequence is `planned → transferring → transferred → verifying → verified → published → committed`. Publication is asserted by the caller after the file has been published and persisted. The history writer uses the supplied connection and the existing history API for the import, collection placement or archive copy. The caller controls the outer transaction. SQLite permits one committed result per operation. Invalid journal transitions raise `StateError`. Configuration mismatches use the registry's `ConfigError`.
 
+The [shared transfer API](transfer.md) drives these transitions for a single planned copy, including fresh verification on recovery.
+
 ## Recovery
 
 1. Read the unfinished operation and its resources, end the read transaction, and acquire the same locks.

@@ -1,0 +1,20 @@
+# Verified transfer foundation
+
+`media_archive.transfer.execute_transfer(config, operation_id, *, open_source, record_result, progress=None, cancelled=None)`
+executes one planned [journal operation](journal.md). It is a Python API. The caller plans the exact destination occurrence, expected SHA-256 and size, and all applicable resource locks; it supplies an opener for the verified source plus its relative path and a callback that writes the corresponding history record. Import selection, free-space planning for a batch and CLI execution belong to the import workflow.
+
+## Copy and publication
+
+1. Reacquire the plan's locks and verify the registered writable destination. Staging and collection destinations must be on a configured local volume; archive destinations must use the current volume of the planned group. A file cannot occupy a reserved collection directory or one of its ancestors. Parent directories are opened without following links or entering nested mounts.
+2. Create a private `.media-archive-transfer-<run-id>` directory beside the destination on the same filesystem. The file inside it is never the destination. Local copies use [rsync](https://rsync.samba.org/ftp/rsync/rsync.1) on a verified open source descriptor. ADB copies use the registered source's existing streaming adapter and compute source SHA-256 on that stream. Both paths preserve source bytes and request the source modification time; timestamp precision depends on the destination filesystem. Cancellation is checked at source hash checkpoints and again before publication. A local rsync process must return or be interrupted before a later callback checkpoint can be reached.
+3. Read the part independently from disk and require its SHA-256 and size to match the plan. Synchronize the file before publication. A mismatch or interrupted read cannot publish. Audit and inventory exclude the reserved transfer directories from local scans.
+4. Publish with [Linux `renameat2(RENAME_NOREPLACE)`](https://man7.org/linux/man-pages/man2/renameat2.2.html). Where rename flags are unavailable, atomically create a hard link without replacing an existing name, synchronize the destination directory, then remove the staged name. If neither operation is supported, the transfer fails safely. Before recording publication, synchronize the destination directory and its ancestors up to the verified volume root, including on retry or recovery. An existing destination is never overwritten. Verification of a part and reading the existing destination are separate from publication, so later policy workflows can use them when preparing a controlled replacement.
+5. Commit the history callback and the journal's completed state together. A repeated call for a committed operation returns its original attempt and verification IDs.
+
+## Recovery
+
+Call the same API with the same operation ID. If the previous attempt might have published, the executor independently checks the destination before opening the source. A matching file can be committed with fresh evidence. A missing destination allows a new transfer; different contents or an unsafe path require review. Reserved parts from interrupted or failed attempts remain on disk for explicit cleanup. A retry can start the file from the beginning, including over ADB.
+
+`TransferConflict` is a `StateError` for an existing or mismatching destination. Source, filesystem and verification failures leave an unfinished or failed attempt, with no successful history record. Configuration failures follow the normal registry checks. There is no automatic replacement or cleanup of failed parts. Direct filesystem edits outside the application do not participate in its resource locks.
+
+[Transfer tests](../tests/test_transfer.py) use temporary directories, real rsync when installed and synthetic volume checks and ADB streams. They cover independent verification, competing destinations, retained parts and process exit immediately before and after publication. Actual NTFS destination and end-to-end import trials are separate.

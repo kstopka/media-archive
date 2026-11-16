@@ -128,13 +128,19 @@ class LocalSource:
             return SourceEntry.from_stat(path, os.fstat(descriptor))
 
     @contextmanager
-    def read_chunks(self, path: Path, *, expected: SourceEntry | None = None) -> Generator[Iterator[bytes], None, None]:
+    def open_file(self, path: Path, *, expected: SourceEntry | None = None) -> Generator[BinaryIO, None, None]:
+        """Keep the verified local file open for an operation using its descriptor."""
         with open_media_file(self._volume, _relative(path), scope=self._scope) as source:
             if expected is not None:
                 _check_open_file(path, source, expected)
-            yield _read_local(source)
+            yield source
             if expected is not None:
                 _check_open_file(path, source, expected)
+
+    @contextmanager
+    def read_chunks(self, path: Path, *, expected: SourceEntry | None = None) -> Generator[Iterator[bytes], None, None]:
+        with self.open_file(path, expected=expected) as source:
+            yield _read_local(source)
 
 
 def _check_open_file(path: Path, source: BinaryIO, expected: SourceEntry) -> None:
@@ -308,7 +314,8 @@ def _check_cancelled(cancelled: Callable[[], bool] | None) -> None:
 def hash_source_file(source: LocalSource | AdbSource, path: Path, *,
                      progress: Callable[[int, int], None] | None = None,
                      cancelled: Callable[[], bool] | None = None,
-                     expected: SourceEntry | None = None) -> SourceDigest:
+                     expected: SourceEntry | None = None,
+                     on_chunk: Callable[[bytes], object] | None = None) -> SourceDigest:
     """Return SHA-256 and byte count after a complete read and matching attributes."""
     _check_cancelled(cancelled)
     before = source.attributes(path)
@@ -328,6 +335,8 @@ def hash_source_file(source: LocalSource | AdbSource, path: Path, *,
             if size > before.size:
                 raise StateError("Odczytana liczba bajtów nie zgadza się z rozmiarem pliku.")
             digest.update(chunk)
+            if on_chunk is not None:
+                on_chunk(chunk)
             if progress is not None:
                 progress(size, before.size)
             _check_cancelled(cancelled)

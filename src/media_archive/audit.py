@@ -7,6 +7,8 @@ from pathlib import Path
 import stat
 import unicodedata
 
+from media_archive._transfer_files import is_transfer_part
+
 from media_archive.config import ArchiveGroup, ArchiveTarget, ConfigError, Configuration
 from media_archive.devices import registered_volume
 from media_archive.sources import AdbSource, LocalSource, SourceEntry, open_local_source
@@ -50,6 +52,9 @@ def _scan(source: LocalSource | AdbSource, scan: _Scan) -> None:
             scan.pending.pop()
             continue
         scan.observed_at[directory] = datetime.now(timezone.utc)
+        if isinstance(source, LocalSource):
+            children = tuple(entry for entry in children
+                             if not (stat.S_ISDIR(entry.mode) and is_transfer_part(entry.path.name)))
         scan.entries.update((entry.path, entry) for entry in children)
         scan.pending[-1:] = [entry.path for entry in children if stat.S_ISDIR(entry.mode)]
 
