@@ -43,6 +43,7 @@ The SQLite foundation verification passed **122 tests on Python 3.14.4 with SQLi
 | [test_devices.py](../tests/test_devices.py) | Synthetic Linux volume probes, safe opens and explicit registration commands |
 | [test_sources.py](../tests/test_sources.py) | Read-only source scopes, ADB shell quoting and disconnects, streaming hashes, progress, cancellation and source replacement |
 | [test_audit.py](../tests/test_audit.py) | Quick and full archive comparison, incomplete coverage, report retention, checkpoint recovery and sequential disk attachment |
+| [test_inventory.py](../tests/test_inventory.py) | Initial inventory, nested collection ownership, durable scopes, interruption, and shared SHA-256 content |
 | [test_state_snapshots.py](../tests/test_state_snapshots.py) | Active SQLite snapshots, integrity validation, exclusive restore and reconciliation |
 | [test_state_journal.py](../tests/test_state_journal.py) | Journal migration, contention between processes, recovery and atomic history commits |
 | [test_state_history.py](../tests/test_state_history.py) | Media history, archive requirements, migration and initialization checkpoints |

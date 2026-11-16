@@ -103,7 +103,7 @@ Show source identities, stable profile/collection names, source/local/archive pa
 
 First setup follows the [state lifecycle](../state.md#first-setup-and-upgrades). After explicit confirmation, create `state.sqlite3` in the selected state directory and record the initial state. Later configuration reviews use the same database.
 
-A separate action starts the existing-data inventory. Required local collections, archives and relevant phone baselines can be scanned with resumable progress while disks are connected sequentially. Until all required comparison scope is complete, curated-baseline decisions remain unresolved. Quick path/size observations do not prove content equality; full local SHA-256 audits provide content evidence.
+A separate action starts the [existing-data inventory](../inventory.md) for local collections and archives. Disks can be connected sequentially. Phone baselines are a separate step; curated-baseline decisions remain unresolved until all required comparison scopes are complete. Quick path and size observations do not prove content equality. Local SHA-256 and full archive audits provide content evidence.
 
 The configuration-writing mechanism, edit/validation interface and handling of concurrent configuration edits require a separate implementation design. This document does not add an alternative configuration format or prescribe a new command syntax.
 

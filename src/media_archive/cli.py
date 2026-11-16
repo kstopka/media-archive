@@ -9,6 +9,7 @@ from media_archive import operations
 from media_archive.audit import quick_audit
 from media_archive.config import ConfigError, load_config
 from media_archive.full_audit import full_audit
+from media_archive.inventory import inventory
 from media_archive.reports import Report, write_report
 from media_archive.state import DatabasePublishedError, DeviceKey, StateError
 from media_archive.state.snapshots import SnapshotPublishedError, create_snapshot, restore_snapshot, validate_snapshot
@@ -39,7 +40,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="media-archive",
         description="Lokalne narzędzie do importu, porządkowania i archiwizacji mediów.",
-        epilog="Dostępny jest szybki i pełny AUDIT. IMPORT, SORT i BACKUP nie są jeszcze zaimplementowane.",
+        epilog="Dostępny jest AUDIT i pierwszy spis. IMPORT, SORT i BACKUP nie są jeszcze zaimplementowane.",
     )
     parser.add_argument("--config", metavar="PLIK", help="plik konfiguracji (domyślnie .env)")
     parser.add_argument("--check-config", action="store_true", help="sprawdź sam plik konfiguracji")
@@ -62,6 +63,8 @@ def _parser() -> argparse.ArgumentParser:
     audit.add_argument("--targets", nargs=2, metavar=("PIERWSZY", "DRUGI"))
     audit.add_argument("--mode", choices=("quick", "full"))
     audit.add_argument("--resume", metavar="ID_AUDYTU", help="wznów pełny audyt z zapisanej bazy")
+    inventory_parser = commands.add_parser("inventory", help="wykonaj lub wznów pierwszy spis zbiorów i archiwów")
+    inventory_parser.add_argument("--hash-local", action="store_true", help="odczytaj także SHA-256 lokalnych plików")
     device = commands.add_parser("device", help="sprawdź lub jawnie zarejestruj wolumin")
     actions = device.add_subparsers(dest="device_action", required=True)
     for action, help_text in (
@@ -117,7 +120,9 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     dry_run = getattr(args, "dry_run", False)
     if args.command == "device":
         dry_run = args.device_action != "check" and not getattr(args, "yes", False)
-    save_report = getattr(args, "report", False) or (args.command in ("setup", "migrate", "audit") and not dry_run)
+    save_report = getattr(args, "report", False) or (
+        args.command in ("setup", "migrate", "audit", "inventory") and not dry_run
+    )
     try:
         operations.check_application_paths(config, reports=save_report, device_mount=getattr(args, "to", None))
     except StateError as error:
@@ -156,6 +161,10 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             else:
                 outcome = quick_audit(config, args.group, *args.targets, dry_run=dry_run)
             code, message, details = outcome.code, outcome.message, outcome.details
+        elif args.command == "inventory":
+            outcome = inventory(config, hash_local=args.hash_local,
+                                announce=lambda message: print(message, file=sys.stderr, flush=True))
+            code, message, details = outcome.code, outcome.message, outcome.details
         else:
             if args.command == "resume" and not dry_run:
                 raise StateError("Wznowienie transferu będzie dostępne po wdrożeniu operacji na plikach. "
@@ -174,7 +183,7 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     except StateError as error:
         report = Report(args.command, 1, f"Błąd wykonania: {error}", dry_run)
 
-    print(report.render(summary_only=args.command == "audit" and save_report), end="",
+    print(report.render(summary_only=args.command in ("audit", "inventory") and save_report), end="",
           file=sys.stderr if report.code else sys.stdout)
     if save_report:
         try:

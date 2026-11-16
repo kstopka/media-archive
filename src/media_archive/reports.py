@@ -39,6 +39,22 @@ class Report:
                     lines.append(f"Operacja {item['id_operacji']} · {item['stan']} · uruchomienie {item['id_uruchomienia'] or '—'}")
                     if "następny_krok" in item:
                         lines.append(item["następny_krok"])
+            elif key == "Zakresy spisu":
+                for item in value:
+                    summary = f"{item['zakres']} · {item['stan']}"
+                    if "pliki" in item:
+                        summary += f" · pliki {item['pliki']}"
+                    for note in ("uwaga", "błąd"):
+                        if note in item:
+                            summary += f" · {item[note]}"
+                    if "błędy odczytu" in item:
+                        summary += f" · błędy odczytu {len(item['błędy odczytu'])}"
+                    lines.append(summary)
+                    if not summary_only:
+                        if "ID obserwacji" in item:
+                            lines.append(f"ID obserwacji · {item['ID obserwacji']}")
+                        lines.extend(f"- {error['ścieżka']} · {error['błąd']}"
+                                     for error in item.get("błędy odczytu", ()))
             elif self.command == "audit" and key in ("Różnice", "Błędy skanowania", "Odczytane katalogi", "Odczyty SHA-256"):
                 if not summary_only and value:
                     lines.append(key)

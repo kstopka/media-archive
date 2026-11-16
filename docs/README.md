@@ -2,7 +2,7 @@
 
 This directory contains technical documentation for developers and AI agents. Start here before reading application source. The implementation reference describes **implemented behavior**; the roadmap and `design/` pages are explicitly marked plans. All pages are public: examples must contain synthetic paths and identifiers only.
 
-Current coverage includes the package and CLI, configuration, SQLite lifecycle, persistent registration, media history and quick or resumable full archive audit.
+Current coverage includes the package and CLI, configuration, SQLite lifecycle, persistent registration, media history, archive audit, and the initial inventory.
 
 ## Reading order
 
@@ -16,6 +16,7 @@ Current coverage includes the package and CLI, configuration, SQLite lifecycle, 
 | [devices.md](devices.md) | Linux mount checks, safe file paths and explicit device changes |
 | [sources.md](sources.md) | Read-only local and ADB adapters, streaming SHA-256 and read stability checks |
 | [audit.md](audit.md) | Quick comparisons, resumable SHA-256 reads and audit reports |
+| [inventory.md](inventory.md) | First inventory of local collections and archive targets, and how to resume it |
 | [history.md](history.md) | Media occurrences, evidence, archive requirements and initialization |
 | [journal.md](journal.md) | Operation attempts, resource locks and recovery |
 | [cli.md](cli.md) | Setup, migrations, planning, journal previews and report retention |
@@ -57,7 +58,7 @@ These documents use neutral examples and do not depend on private planning notes
 | CLI | Help, configuration checks, setup, migration, journal previews and reports |
 | Configuration | Literal `.env` parsing, immutable models, references, collection trees and lexical storage validation |
 | Collections and policies | Configuration and pure lookup methods; no scanning or file mutations |
-| Sources/storage | Linux volume checks and read-only local and ADB adapters. Inventory workflows remain planned. |
+| Sources/storage | Linux volume checks and read-only local and ADB adapters |
 | Stable identity guard | In-memory key checks, with trusted keys loaded from SQLite by the registry API |
 | SQLite | Explicit creation/opening, schema validation, transactions and migrations through a Python API |
 | Persistent registration | Explicit Python API for identities, bindings, archive destination reservations and hardware changes |
@@ -65,6 +66,7 @@ These documents use neutral examples and do not depend on private planning notes
 | Operation journal | Python API for durable attempts, recovery and process-held resource locks |
 | State snapshots and restore | CLI and Python APIs for manual generations, validation and restore |
 | AUDIT | Quick metadata comparison and resumable full SHA-256 comparison for two selected archive targets |
+| Initial inventory | Durable local collection and archive scopes, with optional local SHA-256 |
 | IMPORT, SORT, BACKUP | Planned |
 | Backup menu/month availability | Not implemented; configuration records intended scope and filtering mode |
 | Configuration wizard | Future enhancement; settings are currently edited in `.env` |
