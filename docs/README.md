@@ -22,6 +22,7 @@ Current coverage includes the package and CLI, configuration, SQLite lifecycle, 
 | [journal.md](journal.md) | Operation attempts, resource locks and recovery |
 | [transfer.md](transfer.md) | Verified one-file transfer, publication and recovery |
 | [import-planning.md](import-planning.md) | Source manifests, profile decisions, reimport and staging preflight |
+| [camera-import.md](camera-import.md) | Import a registered camera card to staging and inspect the results |
 | [cli.md](cli.md) | Setup, migrations, planning, journal previews and report retention |
 | [snapshots.md](snapshots.md) | Manual state snapshots, validation and restore |
 | [development.md](development.md) | Environment, tests, change locations and documentation maintenance |
@@ -75,7 +76,8 @@ These documents use neutral examples and do not depend on private planning notes
 | AUDIT | Quick metadata comparison and resumable full SHA-256 comparison for two selected archive targets |
 | Initial inventory | Durable local collection and archive scopes, with optional local SHA-256 |
 | Phone initialization | Fixed ADB baseline and initial decisions against saved local and archive evidence |
-| IMPORT, SORT, BACKUP execution | Planned |
+| Camera import | Verified import from registered cards to staging |
+| Phone import, SORT, BACKUP | Planned |
 | Backup menu/month availability | Not implemented; configuration records intended scope and filtering mode |
 | Configuration wizard | Future enhancement; settings are currently edited in `.env` |
 

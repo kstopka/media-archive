@@ -1,7 +1,7 @@
 """Execute one planned transfer and reconcile a possibly published copy."""
 
 from collections.abc import Callable
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import os
@@ -17,7 +17,9 @@ from media_archive.operations import check_application_paths
 from media_archive.sources import AdbSource, LocalSource, ReadCancelled, SourceDigest, hash_source_file
 from media_archive.state import DeviceKey, StateError, open_database, transaction, validate_registered_configuration
 from media_archive.state import history, journal
-from media_archive.state.locking import Resource, installation_lock, lock_resources
+from media_archive.state.locking import (
+    OperationLocks, Resource, canonical_path, installation_lock, lock_resources, require_locks,
+)
 
 SourceOpener = Callable[[], AbstractContextManager[tuple[LocalSource | AdbSource, Path]]]
 ResultWriter = Callable[[Connection, int], None]
@@ -91,14 +93,18 @@ def _copy_source(part: Part, source: LocalSource | AdbSource, path: Path, expect
 
 def execute_transfer(config: Configuration, operation_id: int, *, open_source: SourceOpener,
                      record_result: ResultWriter, progress: Callable[[int, int], None] | None = None,
-                     cancelled: Callable[[], bool] | None = None) -> TransferResult:
+                     cancelled: Callable[[], bool] | None = None,
+                     locks: OperationLocks | None = None) -> TransferResult:
     """Acquire the planned locks, publish without overwriting, and commit the verified result."""
     database = config.app.database_file
     check_application_paths(config)
     with installation_lock(database):
         with open_database(database) as connection:
             resources = journal.load_resources(connection, operation_id)
-        with lock_resources(database, resources) as locks, open_database(database, writable=True) as connection:
+        if locks is not None:
+            require_locks(locks, canonical_path(database), resources)
+        ownership = lock_resources(database, resources) if locks is None else nullcontext(locks)
+        with ownership as locks, open_database(database, writable=True) as connection:
             validate_registered_configuration(config)
             with connection.begin():
                 operation = journal.load_operation(connection, operation_id)

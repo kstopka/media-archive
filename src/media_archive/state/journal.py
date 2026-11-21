@@ -296,6 +296,11 @@ def load_operation(connection: Connection, operation_id: int) -> RowMapping:
     return require_row(connection, operations, id=operation_id)
 
 
+def find_operation(connection: Connection, operation_key: str) -> RowMapping | None:
+    """Find a previously planned operation by its stable key."""
+    return find(connection, operations, operation_key=operation_key)
+
+
 def load_resources(connection: Connection, operation_id: int) -> frozenset[Resource]:
     require_row(connection, operations, id=operation_id)
     return _operation_resources(connection, operation_id)

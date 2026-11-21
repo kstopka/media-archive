@@ -20,10 +20,11 @@ Use `media-archive` or `python -m media_archive`. Put `--config FILE` before the
 | `inventory [--hash-local]` | Build or resume the [initial inventory](inventory.md); optionally read local SHA-256. |
 | `init-phone PROFILE [--audit AUDIT_ID]` | Capture a [phone baseline](phone-initialization.md) or compare it using a completed full audit. |
 | `import --source PROFILE --dry-run [--card CARD --mount DIRECTORY] [--reimport RELATIVE_PATH] [--report]` | Show the [import plan](import-planning.md), decisions and staging preflight without copying. |
+| `import --source PROFILE --card CARD --mount DIRECTORY [--reimport RELATIVE_PATH]` | Execute [camera card import](camera-import.md) with a text and JSON report. |
 | `pending` | List unfinished journal operations and their latest attempt states. A listed operation may still have a live owner. |
-| `resume ID --dry-run` | Show the next step for an unfinished operation using its numeric operation ID. Actual file recovery will be available with the transfer workflow. Until then, `resume ID` returns status 1. |
+| `resume ID --dry-run` | Show the next step for an unfinished operation using its numeric operation ID. The CLI does not execute the recovery yet; `resume ID` returns status 1. |
 
-All commands that need existing state report a missing database as an error. Setup and migration use the [SQLite lifecycle](state.md#first-setup-and-upgrades). The configuration wizard is a separate planned feature. Media operations will use the [journal](journal.md) and [history](history.md).
+All commands that need existing state report a missing database as an error. Setup and migration use the [SQLite lifecycle](state.md#first-setup-and-upgrades). The configuration wizard is a separate planned feature. Camera import uses the [journal](journal.md) and [history](history.md).
 
 The [snapshot reference](snapshots.md) covers generation contents, filesystem effects and the reconciliation requirement.
 
@@ -31,7 +32,7 @@ The recovery preview distinguishes a new attempt from an explicit takeover of an
 
 ## Reports and exit status
 
-Setup, migration, audit, inventory and phone initialization executions save one UTF-8 text/JSON pair per finished invocation after loading a valid configuration and checking output locations. Planning displays its result in the terminal. Add `--report` to a dry run to save the pair. A dry run makes no state, registration or media changes. If its report directory is under the state directory, producing that report may also create the parent directories.
+Setup, migration, audit, inventory, phone initialization and camera import executions save one UTF-8 text/JSON pair per finished invocation after loading a valid configuration and checking output locations. Planning displays its result in the terminal. Add `--report` to a dry run to save the pair. A dry run makes no state, registration or media changes. If its report directory is under the state directory, producing that report may also create the parent directories.
 
 State and report paths are checked against resolved collection roots, including collections reached through symbolic links. When a report is requested, the CLI rejects an existing non-directory or symbolic link at `APP_REPORTS_DIR` before setup or migration writes state.
 
@@ -44,7 +45,7 @@ Rotation checks the Media Archive format marker and requires the invocation ID a
 | 0 | Success or completed preview |
 | 1 | Execution error |
 | 2 | Invalid arguments or configuration |
-| 3 | Partial or blocked result. An audit, inventory, or phone initialization has pending work, the import plan cannot proceed, a published database or snapshot could not be confirmed durable, or a completed execution could not save its report. |
+| 3 | Partial or blocked result. An audit, inventory, or phone initialization has pending work, an import is blocked or stopped at a failed file, a published database or snapshot could not be confirmed durable, or a completed execution could not save its report. |
 | 4 | Audit completed and detected differences in paths, attributes or full-mode SHA-256. |
 | 130 | Interrupted by the operator |
 

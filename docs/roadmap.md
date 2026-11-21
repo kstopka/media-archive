@@ -2,7 +2,7 @@
 
 This public roadmap tracks project milestones. Checkboxes mark completed milestones. For currently available behavior, see the [technical documentation](README.md).
 
-The CLI skeleton, configuration loader, SQLite lifecycle, persistent registration and [history APIs](history.md) are available. Media operations and the configuration wizard remain planned. See the [SQLite state reference](state.md).
+The CLI, configuration loader, SQLite lifecycle, persistent registration and [history APIs](history.md) are available. The CLI supports camera card import; phone import, sorting, backup and the configuration wizard remain planned. See the [SQLite state reference](state.md).
 
 Design references: [archive workflows and state](design/archive-workflows.md) and [future configurator](design/configurator.md). Future module boundaries, database details and command syntax must be finalized during the relevant implementation task.
 
@@ -49,7 +49,7 @@ After acceptance, inventory/audit can be used without waiting for IMPORT/SORT/BA
 
 - [x] **4.1 Shared transfer mechanism.** The [transfer API](transfer.md) copies with rsync or ADB, independently verifies a temporary file, publishes without replacing an existing name and reconciles the publication/database crash window. Interrupted parts are retained.
 - [x] **4.2 Import planning.** Build read-only previews and record source observations through the same [planner API](import-planning.md). Apply per-profile dispositions, exact reimport and staging-space preflight.
-- [ ] **4.3 Camera import.** Videos/photos, configured exclusions, reporting of unsupported types and content recognition despite formatting or reused names. Preserve source cards; reject hash mismatches.
+- [x] **4.3 Camera import.** [Import camera card videos and photos](camera-import.md) to staging with verified transfers and per-profile history. Preserve the card, report skipped formats and stop on a hash mismatch.
 - [ ] **4.4 Phone import through ADB.** Apply baseline dispositions and import new content, handling authorization/offline states. Preserve phone originals.
 - [ ] **4.5 Resume and import history.** Journal attempts, reconcile interruptions and retain history after manual selection. Distinguish verified import, staging presence and completed collection placement. Missing staging before SORT completion requires a visible pending-material error and explicit reimport. Failed/unverified transfers cannot produce success records.
 

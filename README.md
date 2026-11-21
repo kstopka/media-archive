@@ -11,7 +11,7 @@ The planned workflow keeps four operations separate:
 
 ## Status
 
-The CLI supports read-only configuration validation, [quick and full archive audits](docs/audit.md), the [initial inventory](docs/inventory.md), and [phone baseline initialization](docs/phone-initialization.md). Python APIs provide [SQLite lifecycle and migrations](docs/state.md), [explicit configuration registration](docs/registration.md), [media history and initialization](docs/history.md), and [read-only local and Android source access](docs/sources.md). Import, sorting and backup remain planned.
+The CLI supports read-only configuration validation, [quick and full archive audits](docs/audit.md), the [initial inventory](docs/inventory.md), [phone baseline initialization](docs/phone-initialization.md), and [camera card import](docs/camera-import.md). Python APIs provide [SQLite lifecycle and migrations](docs/state.md), [explicit configuration registration](docs/registration.md), [media history and initialization](docs/history.md), and [read-only local and Android source access](docs/sources.md). Phone import, sorting and backup remain planned.
 
 ## Quick start
 

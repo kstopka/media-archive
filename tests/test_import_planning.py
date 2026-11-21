@@ -7,17 +7,19 @@ from io import StringIO
 import json
 import os
 from pathlib import Path
+import shutil
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
 from media_archive.cli import main
+from media_archive.camera_import import import_camera
 from media_archive.config import load_config
 from media_archive.devices import MountedVolume, _mount_id, registered_volume
 from media_archive.import_planning import plan_import
 from media_archive.sources import LocalSource
-from media_archive.state import DeviceKey, StateError, open_database, transaction
-from media_archive.state import history
+from media_archive.state import DeviceChange, DeviceKey, StateError, open_database, register_configuration, transaction
+from media_archive.state import history, journal
 from media_archive.state.registry import initialize_database
 from tests.config_fixtures import registry_values, write_config
 
@@ -47,6 +49,8 @@ class ImportPlanningTests(unittest.TestCase):
         self.camera_root.mkdir(parents=True)
         self.enterContext(patch("media_archive.import_planning.open_camera_source", side_effect=self._camera))
         self.enterContext(patch("media_archive.import_planning.verify_volume", side_effect=self._staging))
+        self.enterContext(patch("media_archive.camera_import.open_camera_source", side_effect=self._camera))
+        self.enterContext(patch("media_archive.transfer.verify_volume", side_effect=self._staging))
 
     @contextmanager
     def _camera(self, config, profile, card, mount):
@@ -201,3 +205,119 @@ class ImportPlanningTests(unittest.TestCase):
         self.assertFalse(self.config.local.staging_root.exists())
         with open_database(self.database) as con:
             self.assertEqual(con.exec_driver_sql("SELECT count(*) FROM main.history_observations").scalar_one(), 0)
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_camera_cli_imports_only_verified_videos_and_photos(self) -> None:
+        files = {"clip.MP4": b"video", "photo.JPG": b"photo", "temp.THM": b"thumbnail",
+                 "clip.LRV": b"preview", "unhandled.WAV": b"audio"}
+        for name, data in files.items():
+            (self.camera_root / name).write_bytes(data)
+        preview = self._plan()
+        report, terminal = self._live_cli()
+        self.assertEqual(report["Zaimportowano plików"], 2)
+        self.assertIn("Nieobsługiwane wpisy · 1", terminal)
+        self.assertEqual(report["Pominięte formaty"], 2)
+        self.assertEqual({item.destination: item.destination.read_bytes() for item in preview.transfers},
+                         {item.destination: files[item.relative_path.name] for item in preview.transfers})
+        self.assertEqual({path.name: path.read_bytes() for path in self.camera_root.iterdir()}, files)
+        with open_database(self.database) as con:
+            profile = history.load_source_id(con, "camera", "hero8")
+            imports = history.load_imports(con, profile)
+            self.assertEqual(len(imports), 2)
+            for result in report["Wyniki importu"]:
+                attempt, = journal.load_attempts(con, result["operacja"])
+                self.assertEqual(attempt.state, "committed")
+            self.assertEqual(con.exec_driver_sql(
+                "SELECT count(*) FROM main.history_verifications WHERE result = 'match'"
+            ).scalar_one(), 2)
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_camera_import_preserves_content_history_after_card_reformat(self) -> None:
+        clip = self.camera_root / "clip.MP4"
+        clip.write_bytes(b"first")
+        self.assertEqual(import_camera(self.config, "hero8", card="a", mount=self.card).code, 0)
+        previous = registered_volume(self.config, DeviceKey("card", "a"))
+        values = registry_values(self.root)
+        values["CAMERA_CARD_A_UUID"] = "synthetic-reformatted-card"
+        write_config(self.settings, values)
+        self.config = load_config(self.settings)
+        register_configuration(self.config, device_changes=[DeviceChange(previous, "reformat")])
+        clip.write_bytes(b"other")  # Same name and length, but different bytes.
+        (self.camera_root / "renamed.MP4").write_bytes(b"first")
+        report, _ = self._live_cli()
+        self.assertEqual(report["Zaimportowano plików"], 1)
+        self.assertEqual({item["ścieżka"]: item["decyzja"] for item in report["Manifest importu"]},
+                         {"clip.MP4": "do skopiowania", "renamed.MP4": "już zaimportowano"})
+        with open_database(self.database) as con:
+            profile = history.load_source_id(con, "camera", "hero8")
+            imports = history.load_imports(con, profile)
+            self.assertEqual(len(imports), 2)
+            self.assertEqual(len({history.load_occurrence(con, row.source_occurrence_id).volume_id
+                                  for row in imports}), 2)
+            self.assertEqual({Path(history.load_occurrence(con, row.staging_occurrence_id).path).read_bytes()
+                              for row in imports}, {b"first", b"other"})
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_camera_import_does_not_commit_changed_file_after_planning(self) -> None:
+        (self.camera_root / "a.jpg").write_bytes(b"first")
+        changed = self.camera_root / "b.MP4"
+        changed.write_bytes(b"video")
+        (self.camera_root / "c.jpg").write_bytes(b"later")
+
+        def open_after_change(*args, **kwargs):
+            changed.write_bytes(b"other")
+            return self._camera(*args, **kwargs)
+
+        with patch("media_archive.camera_import.open_camera_source", side_effect=open_after_change):
+            report, _ = self._live_cli(expected=3)
+        self.assertEqual(report["Zaimportowano plików"], 1)
+        self.assertEqual([item["stan"] for item in report["Wyniki importu"]], ["zaimportowano", "błąd"])
+        self.assertIn("SHA-256", report["Wyniki importu"][1]["błąd"])
+        manifest = {item["ścieżka"]: Path(item["staging"]) for item in report["Manifest importu"]}
+        self.assertEqual(manifest["a.jpg"].read_bytes(), b"first")
+        self.assertFalse(manifest["b.MP4"].exists())
+        self.assertFalse(manifest["c.jpg"].exists())
+        with open_database(self.database) as con:
+            profile = history.load_source_id(con, "camera", "hero8")
+            self.assertEqual(len(history.load_imports(con, profile)), 1)
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_camera_retry_reuses_destination_operation_after_source_moves(self) -> None:
+        original = self.camera_root / "old-folder"
+        original.mkdir()
+        (original / "clip.MP4").write_bytes(b"same video")
+        with patch("media_archive._transfer_files.Part.publish",
+                   side_effect=StateError("Testowe przerwanie przed publikacją.")):
+            first = import_camera(self.config, "hero8", card="a", mount=self.card)
+        self.assertEqual(first.code, 3)
+        failed, = first.results
+        destination = first.plan.transfers[0].destination
+        self.assertFalse(destination.exists())
+        with open_database(self.database) as con:
+            self.assertEqual(journal.load_attempts(con, failed.operation_id)[-1].state, "needs_review")
+
+        original.rename(self.camera_root / "new-folder")
+        retry = import_camera(self.config, "hero8", card="a", mount=self.card)
+        self.assertEqual(retry.code, 0)
+        copied, = retry.results
+        self.assertEqual(copied.operation_id, failed.operation_id)
+        self.assertEqual(copied.path, Path("new-folder/clip.MP4"))
+        self.assertEqual(destination.read_bytes(), b"same video")
+        with open_database(self.database) as con:
+            self.assertEqual(journal.load_unfinished(con), ())
+            profile = history.load_source_id(con, "camera", "hero8")
+            imported, = history.load_imports(con, profile)
+            self.assertTrue(history.load_occurrence(con, imported.source_occurrence_id).path.endswith(
+                "/new-folder/clip.MP4"
+            ))
+
+    def _live_cli(self, *, expected: int = 0) -> tuple[dict, str]:
+        out = StringIO()
+        with redirect_stdout(out), redirect_stderr(out):
+            code = main(["--config", str(self.settings), "import", "--source", "hero8", "--card", "a",
+                         "--mount", str(self.card)])
+        self.assertEqual(code, expected, out.getvalue())
+        report = sorted(self.config.app.reports_dir.glob("*/report.json"))[-1]
+        data = json.loads(report.read_text(encoding="utf-8"))
+        self.assertFalse(data["tryb_planowania"])
+        return data["szczegóły"], out.getvalue()

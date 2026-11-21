@@ -59,6 +59,16 @@ class Report:
                 if not summary_only and value:
                     lines.append(key)
                     lines.extend(f"- {item['ścieżka']} · {item['decyzja']}" for item in value)
+            elif key == "Wyniki importu":
+                for item in value:
+                    if summary_only and item["stan"] == "zaimportowano":
+                        continue
+                    line = f"- {item['ścieżka']} · {item['stan']}"
+                    if item["operacja"] is not None:
+                        line += f" · operacja {item['operacja']}"
+                    if "błąd" in item:
+                        line += f" · {item['błąd']}"
+                    lines.append(line)
             elif key == "Nieobsługiwane pliki telefonu":
                 if not summary_only:
                     lines.append(key)

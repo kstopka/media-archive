@@ -1,6 +1,6 @@
 # Import planning
 
-Use `import --dry-run` to see what a selected source would import:
+Use `import --dry-run` to see what a selected source would import. [Camera card import](camera-import.md) uses the same plan for execution:
 
 ```bash
 media-archive import --source phone-a --dry-run
@@ -20,6 +20,6 @@ With copies planned, the planner checks the registered writable staging volume. 
 
 ## API and reports
 
-`media_archive.import_planning.plan_import(config, profile, *, card=None, mount=None, reimport=(), record=False, announce=..., cancelled=None)` returns an immutable manifest. `plan.transfers` exposes eligible items only when the batch is ready. With `record=True`, the same planner records the stable source reads of a ready batch in one SQLite transaction, returning the observation run and source occurrence IDs for use by later import execution. It does not publish copies or record successful imports. The CLI uses the read-only mode, writes no observations or media, and saves the text and JSON plan only with `--report`. A blocked plan returns code `3`, while source or configuration errors follow the [CLI conventions](cli.md#reports-and-exit-status).
+`media_archive.import_planning.plan_import(config, profile, *, card=None, mount=None, reimport=(), record=False, locks=None, announce=..., cancelled=None)` returns an immutable manifest. `plan.transfers` exposes eligible items only when the batch is ready. With `record=True`, the planner records stable source reads in one SQLite transaction, returning the observation run and source occurrence IDs for execution. The planner does not publish copies or record successful imports. It can reuse a caller's active source lock. The CLI dry run writes no observations or media and saves the text and JSON plan only with `--report`. A blocked plan returns code `3`, while source or configuration errors follow the [CLI conventions](cli.md#reports-and-exit-status).
 
 [Synthetic planning tests](../tests/test_import_planning.py) verify profile isolation, repeated filenames, exact reimport, source failures, capacity and the read-only preview. [Phone initialization tests](../tests/test_inventory.py) verify how the planner uses both baseline policies.

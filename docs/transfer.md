@@ -1,7 +1,7 @@
 # Verified transfer foundation
 
-`media_archive.transfer.execute_transfer(config, operation_id, *, open_source, record_result, progress=None, cancelled=None)`
-executes one planned [journal operation](journal.md). It is a Python API. The caller plans the exact destination occurrence, expected SHA-256 and size, and all applicable resource locks; it supplies an opener for the verified source plus its relative path and a callback that writes the corresponding history record. The [import planner](import-planning.md) supplies batch selection and free-space preflight independently of execution.
+`media_archive.transfer.execute_transfer(config, operation_id, *, open_source, record_result, progress=None, cancelled=None, locks=None)`
+executes one planned [journal operation](journal.md). The caller plans the exact destination occurrence, expected SHA-256 and size, and all applicable resource locks; it supplies an opener for the verified source plus its relative path and a callback that writes the corresponding history record. It can pass an active lock group that covers the plan's resources. The [import planner](import-planning.md) supplies batch selection and free-space preflight independently of execution.
 
 ## Copy and publication
 

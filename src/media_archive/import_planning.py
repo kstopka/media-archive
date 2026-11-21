@@ -23,7 +23,9 @@ from media_archive.sources import ReadCancelled, hash_source_file, open_adb_sour
 from media_archive.state import DeviceKey, StateError, open_database, transaction, validate_registered_configuration
 from media_archive.state import history
 from media_archive.state.initialization import load_initialization
-from media_archive.state.locking import Resource, installation_lock, lock_resources
+from media_archive.state.locking import (
+    OperationLocks, Resource, canonical_path, installation_lock, lock_resources, require_locks,
+)
 from media_archive.state.reconciliation import load_reconciliation
 
 ContentIdentity = tuple[str, int]
@@ -287,6 +289,7 @@ def _record(connection: Connection, plan: ImportPlan, selection: _Selection, dev
 
 def plan_import(config: Configuration, profile: str, *, card: str | None = None, mount: Path | None = None,
                 reimport: Iterable[str | Path] = (), record: bool = False,
+                locks: OperationLocks | None = None,
                 announce: Callable[[str], None] = lambda _: None,
                 cancelled: Callable[[], bool] | None = None) -> ImportPlan:
     """Build the same plan for a preview or a caller that records source observations."""
@@ -298,8 +301,11 @@ def plan_import(config: Configuration, profile: str, *, card: str | None = None,
         validate_registered_configuration(config)
         with open_database(database) as connection:
             source_id = history.load_source_id(connection, selection.kind, profile)
-        locks = lock_resources(database, [Resource("source", str(source_id))]) if record else nullcontext()
-        with locks, open_database(database, writable=record) as connection:
+        resources = [Resource("source", str(source_id))]
+        if locks is not None:
+            require_locks(locks, canonical_path(database), resources)
+        ownership = lock_resources(database, resources) if record and locks is None else nullcontext()
+        with ownership, open_database(database, writable=record) as connection:
             device = registered_volume(config, selection.key)
             plan = ImportPlan(profile, selection.kind, source_id, (), (), config.app.min_free_bytes)
             with connection.begin():
