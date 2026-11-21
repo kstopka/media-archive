@@ -41,7 +41,7 @@ The SQLite foundation verification passed **122 tests on Python 3.14.4 with SQLi
 | [test_config_identities.py](../tests/test_config_identities.py) | Display label edits/defaults , unknown IDs and explicit registration, retained offline identities, hardware changes and no-write checks |
 | [test_state_database.py](../tests/test_state_database.py) | Explicit SQLite lifecycle, read-only behavior, migration transactions, constraints, publication failures, concurrent creation/migration and recovery after process termination |
 | [test_devices.py](../tests/test_devices.py) | Synthetic Linux volume probes, safe opens and explicit registration commands |
-| [test_sources.py](../tests/test_sources.py) | Read-only source scopes, ADB shell quoting and disconnects, streaming hashes, progress, cancellation and source replacement |
+| [test_sources.py](../tests/test_sources.py) | Read-only source scopes, ADB shell quoting and disconnects, streaming hashes, cancellation, source replacement and phone import with a synthetic ADB client |
 | [test_audit.py](../tests/test_audit.py) | Quick and full archive comparison, incomplete coverage, report retention, checkpoint recovery and sequential disk attachment |
 | [test_inventory.py](../tests/test_inventory.py) | Initial inventory and phone baseline, durable scopes, interruption, and content comparison under both policies |
 | [test_transfer.py](../tests/test_transfer.py) | Real temporary file publication, independent verification, retained parts and process exit around publication |

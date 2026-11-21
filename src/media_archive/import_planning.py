@@ -22,7 +22,7 @@ from media_archive.operations import check_application_paths
 from media_archive.sources import ReadCancelled, hash_source_file, open_adb_source, open_camera_source
 from media_archive.state import DeviceKey, StateError, open_database, transaction, validate_registered_configuration
 from media_archive.state import history
-from media_archive.state.initialization import load_initialization
+from media_archive.state.initialization import Initialization, load_initialization
 from media_archive.state.locking import (
     OperationLocks, Resource, canonical_path, installation_lock, lock_resources, require_locks,
 )
@@ -127,17 +127,31 @@ def _baseline(connection: Connection, source_id: int, selection: _Selection, dev
             raise StateError("Uzupełnienie bazowego spisu wymaga tego samego telefonu i katalogu źródłowego.")
         if requested:
             raise StateError("Ponowny import telefonu jest dostępny po zakończeniu jego inicjalizacji.")
-    identities = history.load_baseline_contents(connection, state.started_run_id, source_id)
-    decisions = {}
-    gaps: BaselineGaps | None = set() if pending else None
-    for row in json.loads(comparison.cursor)["files"]:
-        digest, size, name = identities[row["occurrence_id"]]
-        identity = digest, size
-        decision = row["decision"]
-        decisions[identity] = decision
-        if gaps is not None and decision == "missing_local":
-            gaps.add((Path(name).relative_to(selection.history_root), identity))
+    files = tuple(baseline_files(connection, source_id, state, comparison.cursor))
+    decisions = {(digest, size): decision for decision, digest, size, _ in files}
+    gaps = None
+    if pending:
+        gaps = {(Path(name).relative_to(selection.history_root), (digest, size))
+                for digest, size, name in unfilled_baseline(connection, source_id, device_id, files)}
     return decisions, gaps
+
+
+def baseline_files(
+    connection: Connection, source_id: int, state: Initialization, cursor: str,
+) -> Iterable[tuple[str, str, int, str]]:
+    identities = history.load_baseline_contents(connection, state.started_run_id, source_id)
+    for row in json.loads(cursor)["files"]:
+        digest, size, name = identities[row["occurrence_id"]]
+        yield row["decision"], digest, size, name
+
+
+def unfilled_baseline(connection: Connection, source_id: int, device_id: int,
+                      files: Iterable[tuple[str, str, int, str]]) -> set[tuple[str, int, str]]:
+    missing = {(digest, size, name) for decision, digest, size, name in files if decision == "missing_local"}
+    if not missing:
+        return missing
+    imported = history.load_imported_contents(connection, source_id, baseline_paths=missing, device_id=device_id)
+    return {(digest, size, name) for digest, size, name in missing if (digest, size) not in imported}
 
 
 def _read_manifest(config: Configuration, profile: str, selection: _Selection, mount: Path | None,
@@ -205,7 +219,7 @@ def _decisions(config: Configuration, plan: ImportPlan, imported: dict[ContentId
         if selected and (prior is not None or disposition in ("existing_copy", "baseline_skip")):
             accepted.add(item.relative_path)
             decision = "reimport"
-        elif prior is not None:
+        elif prior is not None and not (gaps is not None and (item.relative_path, identity) in gaps):
             decision = "already_imported"
         elif disposition == "existing_copy":
             decision = "existing_baseline"
@@ -228,7 +242,7 @@ def _decisions(config: Configuration, plan: ImportPlan, imported: dict[ContentId
         items.append(replace(item, decision=decision, destination=destination))
     if requested - accepted:
         problems.append("Ponowny import wymaga dokładnej ścieżki do odczytanego pliku znanego w tym profilu.")
-    if gaps is not None and not any(item.destination is not None for item in items):
+    if gaps and not any(item.destination is not None for item in items):
         problems.append("Inicjalizacja telefonu pozostaje otwarta; nie ma dostępnych plików do uzupełnienia.")
     return replace(plan, items=tuple(items), problems=tuple(dict.fromkeys(problems)))
 

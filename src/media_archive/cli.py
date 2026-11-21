@@ -13,6 +13,7 @@ from media_archive.full_audit import full_audit
 from media_archive.import_planning import ImportPlan, plan_import
 from media_archive.inventory import inventory
 from media_archive.phone_initialization import initialize_phone
+from media_archive.phone_import import import_phone
 from media_archive.reports import Report, write_report
 from media_archive.state import DatabasePublishedError, DeviceKey, StateError
 from media_archive.state.snapshots import SnapshotPublishedError, create_snapshot, restore_snapshot, validate_snapshot
@@ -72,7 +73,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="media-archive",
         description="Lokalne narzędzie do importu, porządkowania i archiwizacji mediów.",
-        epilog="Dostępny jest AUDIT, pierwszy spis i import z karty. Import telefonu, SORT i BACKUP "
+        epilog="Dostępny jest AUDIT, pierwszy spis i import z karty lub telefonu. SORT i BACKUP "
                "nie są jeszcze zaimplementowane.",
     )
     parser.add_argument("--config", metavar="PLIK", help="plik konfiguracji (domyślnie .env)")
@@ -101,7 +102,7 @@ def _parser() -> argparse.ArgumentParser:
     phone_init = commands.add_parser("init-phone", help="zapisz lub porównaj pierwszy spis telefonu")
     phone_init.add_argument("profile", metavar="PROFIL")
     phone_init.add_argument("--audit", metavar="ID_AUDYTU", help="użyj zapisanego pełnego audytu właściwej pary")
-    import_parser = commands.add_parser("import", help="importuj z karty lub pokaż plan importu")
+    import_parser = commands.add_parser("import", help="importuj z karty lub telefonu albo pokaż plan")
     import_parser.add_argument("--source", required=True, metavar="PROFIL")
     import_parser.add_argument("--card", metavar="KARTA")
     import_parser.add_argument("--mount", type=Path, metavar="KATALOG")
@@ -134,8 +135,8 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         parser.error("Użyj setup --dry-run, aby zobaczyć plan, albo setup --yes, aby go wykonać.")
     if args.command == "restore" and (args.config is None or not args.yes):
         parser.error("Użyj --config PLIK restore GENERACJA --yes.")
-    if args.command == "import" and not args.dry_run and (args.card is None or args.mount is None):
-        parser.error("Wykonanie importu z karty wymaga --card i --mount. Dla telefonu użyj --dry-run.")
+    if args.command == "import" and (args.card is None) != (args.mount is None):
+        parser.error("Import z karty wymaga jednocześnie --card i --mount.")
     if args.command == "audit":
         if args.resume is not None:
             if args.group is not None or args.targets is not None or args.mode == "quick":
@@ -225,8 +226,11 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                 message = "Plan importu gotowy." if plan.ready else "Plan importu jest zablokowany."
                 details = _import_details(plan)
             else:
-                outcome = import_camera(config, args.source, card=args.card, mount=args.mount,
-                                        reimport=args.reimport, announce=announce)
+                if args.card is not None:
+                    outcome = import_camera(config, args.source, card=args.card, mount=args.mount,
+                                            reimport=args.reimport, announce=announce)
+                else:
+                    outcome = import_phone(config, args.source, reimport=args.reimport, announce=announce)
                 code, message = outcome.code, outcome.message
                 details = _import_details(outcome.plan)
                 details.update({

@@ -1,7 +1,10 @@
 """Exercise source roots and the actual shell arguments with a synthetic ADB client."""
 
-from contextlib import ExitStack, nullcontext
+from contextlib import ExitStack, nullcontext, redirect_stderr, redirect_stdout
+from datetime import datetime, timezone
 from hashlib import sha256
+from io import StringIO
+import json
 import os
 from pathlib import Path
 import resource
@@ -11,10 +14,15 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
+from media_archive.cli import main
 from media_archive.config import ConfigError, load_config
 from media_archive.devices import MountedVolume, _mount_id
+from media_archive.phone_import import import_phone
 from media_archive.sources import ReadCancelled, SourceDigest, hash_source_file, open_adb_source, open_camera_source
-from media_archive.state import DeviceChange, DeviceKey, StateError, load_registered_devices, register_configuration
+from media_archive.state import (
+    DeviceChange, DeviceKey, StateError, history, initialization, load_registered_devices,
+    open_database, register_configuration, transaction,
+)
 from media_archive.state._installation import OperationBusy
 from media_archive.state.registry import initialize_database
 from tests.config_fixtures import registry_values, write_config
@@ -67,6 +75,107 @@ esac
         }
         self.enterContext(patch.dict(os.environ, env))
         return status_file
+
+    def _import_baseline(self, policy: str, files: dict[str, bytes]) -> int:
+        phone = next(device for device in load_registered_devices(self.config.app.database_file)
+                     if device.key == DeviceKey("phone", "main"))
+        with open_database(self.config.app.database_file, writable=True) as connection, transaction(connection):
+            source_id = history.load_source_id(connection, "phone", "main")
+            run = history.create_run(connection)
+            initialization.start_initialization(
+                connection, source_id, run, policy=policy,
+                boundary=json.dumps({"root": str(self.android), "device_id": phone.device_id}),
+                comparison_scopes=["copies"], processing_scopes=["baseline"],
+                baseline_device_id=phone.device_id if policy == "baseline_skip_missing" else None,
+            )
+            decisions = []
+            for name, data in files.items():
+                content_id = history.record_content(connection, sha256(data).hexdigest(), len(data))
+                occurrence = history.record_occurrence(connection, "source", str(self.android / name),
+                                                       content_id=content_id, device_id=phone.device_id)
+                history.record_observation(connection, occurrence, run, observed_at=datetime.now(timezone.utc),
+                                           present=True, size=len(data))
+                decisions.append({"occurrence_id": occurrence, "decision": "missing_local" if policy == "import_missing"
+                                  else "baseline_skip", "path": str(self.android / name),
+                                  "local_occurrence_ids": [], "archive_reads": []})
+            initialization.record_initialization_progress(
+                connection, source_id, run, phase="comparison", scope="copies", completed=True,
+                cursor=json.dumps({"files": decisions, "local_run_id": run, "audit_id": run}),
+            )
+            if policy == "baseline_skip_missing":
+                for item in decisions:
+                    initialization.record_baseline_skip(connection, item["occurrence_id"], run)
+                initialization.record_initialization_progress(connection, source_id, run, phase="processing",
+                                                               scope="baseline", completed=True)
+                initialization.finish_initialization(connection, source_id, run)
+        return source_id
+
+    def _import_staging(self) -> None:
+        root = self.config.local.volumes[0].root
+        root.mkdir(parents=True)
+        fd = os.open(root, os.O_PATH | os.O_DIRECTORY)
+        self.addCleanup(os.close, fd)
+        volume = MountedVolume(root, _mount_id(fd), "synthetic", "8:1", "8:0", (), False, fd)
+        for module in ("import_planning", "transfer"):
+            self.enterContext(patch(f"media_archive.{module}.verify_volume",
+                                    side_effect=lambda *_args, **_kwargs: nullcontext(volume)))
+
+    def test_phone_import_fills_only_baseline_until_complete_then_imports_new_media(self) -> None:
+        self._fake_adb()
+        self._import_staging()
+        source_id = self._import_baseline("import_missing", {"a.jpg": b"first", "b.mp4": b"second"})
+        (self.android / "a.jpg").write_bytes(b"first")
+        (self.android / "duplicate.mp4").write_bytes(b"second")
+        (self.android / "new.jpg").write_bytes(b"later")
+        partial = import_phone(self.config, "main")
+        self.assertEqual(partial.code, 3)
+        self.assertEqual([item.path.name for item in partial.results], ["a.jpg"])
+        with open_database(self.config.app.database_file) as connection:
+            self.assertEqual(initialization.load_initialization(connection, source_id).status, "in_progress")
+        (self.android / "b.mp4").write_bytes(b"second")
+        finished = import_phone(self.config, "main")
+        self.assertEqual(finished.code, 0)
+        self.assertEqual([item.path.name for item in finished.results], ["b.mp4"])
+        with open_database(self.config.app.database_file) as connection:
+            self.assertEqual(initialization.load_initialization(connection, source_id).status, "completed")
+        output = StringIO()
+        with redirect_stdout(output), redirect_stderr(output):
+            code = main(["--config", str(self.settings), "import", "--source", "main"])
+        self.assertEqual(code, 0, output.getvalue())
+        with open_database(self.config.app.database_file) as connection:
+            imported = history.load_imports(connection, source_id)
+            self.assertEqual({Path(history.load_occurrence(connection, row.staging_occurrence_id).path).read_bytes()
+                              for row in imported}, {b"first", b"second", b"later"})
+            self.assertEqual(len(imported), 3)
+        self.assertEqual((self.android / "b.mp4").read_bytes(), b"second")
+        self.assertEqual(import_phone(self.config, "main").results, ())
+
+    def test_phone_import_respects_baseline_skips_and_records_no_success_after_disconnect(self) -> None:
+        status = self._fake_adb()
+        self._import_staging()
+        source_id = self._import_baseline("baseline_skip_missing", {"skip.jpg": b"skip"})
+        (self.android / "skip.jpg").write_bytes(b"skip")
+        (self.android / "new.jpg").write_bytes(b"new")
+        for value, diagnostic in (("unauthorized", "autoryzacji"), ("offline", "gotowy"), ("missing", "odłączony")):
+            status.write_text(value, encoding="utf-8")
+            with self.assertRaisesRegex(StateError, diagnostic):
+                import_phone(self.config, "main")
+        status.write_text("device", encoding="utf-8")
+
+        def disconnect(message: str) -> None:
+            if message.startswith("Import z telefonu"):
+                status.write_text("disconnected", encoding="utf-8")
+
+        failed = import_phone(self.config, "main", announce=disconnect)
+        self.assertEqual(failed.code, 3)
+        self.assertEqual([item.status for item in failed.results], ["failed"])
+        with open_database(self.config.app.database_file) as connection:
+            self.assertEqual(history.load_imports(connection, source_id), ())
+        status.write_text("device", encoding="utf-8")
+        result = import_phone(self.config, "main")
+        self.assertEqual(result.code, 0)
+        self.assertEqual([item.path.name for item in result.results], ["new.jpg"])
+        self.assertEqual((self.android / "skip.jpg").read_bytes(), b"skip")
 
     def test_camera_source_lists_attributes_and_reads_only_configured_tree(self) -> None:
         mount = self.root / "card"

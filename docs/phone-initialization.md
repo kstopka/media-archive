@@ -16,7 +16,7 @@ The source profile determines the collection and the policy. Comparison requires
 The comparison matches content by SHA-256 and size, including copies with different filenames. It uses local occurrences owned by the configured collection and archive occurrences within that collection's registered destination. An occurrence belonging to another collection does not satisfy the profile's requirement. It records:
 
 - **`baseline_skip_missing`:** keep matches observed locally or on the selected archives; record a baseline skip for files present only on the phone within the compared scope. The profile can now finish initialization.
-- **`import_missing`:** recognize matches in the local collection. Files without a local match stay pending for the later import workflow, even if an archive copy was observed. If there is nothing to fill, initialization can finish.
+- **`import_missing`:** recognize matches in the local collection. Files without a local match stay pending for [phone import](phone-import.md), even if an archive copy was observed. If there is nothing to fill, initialization can finish during comparison.
 
 The command only reads media. It does not create import, placement, or backup success entries. Policy and the source device at the time of capture remain in the history. The command does not implement incremental phone import, camera initialization or a baseline reset.
 
