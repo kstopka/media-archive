@@ -9,6 +9,7 @@ import sys
 from media_archive import operations
 from media_archive.audit import quick_audit
 from media_archive.camera_import import import_camera
+from media_archive.catalog import keep_both, list_conflicts, record_manual_move, search_catalog
 from media_archive.config import ConfigError, load_config
 from media_archive.full_audit import full_audit
 from media_archive.import_planning import ImportPlan, plan_import
@@ -43,6 +44,13 @@ def _device_key(value: str) -> DeviceKey:
         case ["archive", group, alias] if group and alias:
             return DeviceKey("archive", alias, group)
     raise argparse.ArgumentTypeError("Użyj card:ALIAS, local:ALIAS albo archive:GRUPA:ALIAS.")
+
+
+def _catalog_source(value: str) -> tuple[str, str]:
+    kind, _, alias = value.partition(":")
+    if kind not in ("phone", "camera") or not alias:
+        raise argparse.ArgumentTypeError("Użyj phone:PROFIL albo camera:PROFIL.")
+    return kind, alias
 
 
 def _sort_date(value: str) -> date:
@@ -170,6 +178,15 @@ def _parser() -> argparse.ArgumentParser:
     sort_date = commands.add_parser("sort-date", help="zapisz ręczną datę importu oczekującego na SORT")
     sort_date.add_argument("import_id", type=_operation_id, metavar="ID_IMPORTU")
     sort_date.add_argument("date", type=_sort_date, metavar="RRRR-MM-DD")
+    search = commands.add_parser("search", help="wyszukaj zapisane lokalizacje mediów")
+    search.add_argument("--name", metavar="NAZWA")
+    search.add_argument("--month", metavar="RRRR-MM")
+    search.add_argument("--source", type=_catalog_source, metavar="TYP:PROFIL")
+    conflicts = commands.add_parser("conflicts", help="przejrzyj konflikty SORT lub zapisz decyzję")
+    conflicts.add_argument("--keep-both", metavar="GRUPA", help="oznacz grupę jako zachowaj oba")
+    move = commands.add_parser("catalog-move", help="uzgodnij wykonaną ręcznie zmianę lokalizacji")
+    move.add_argument("occurrence_id", type=_operation_id, metavar="ID_LOKALIZACJI")
+    move.add_argument("target", type=Path, metavar="NOWA_ŚCIEŻKA")
     device = commands.add_parser("device", help="sprawdź lub jawnie zarejestruj wolumin")
     actions = device.add_subparsers(dest="device_action", required=True)
     for action, help_text in (
@@ -325,6 +342,23 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             set_sort_date(config, args.import_id, args.date)
             details = {"ID importu": args.import_id, "Ręczna data": args.date.isoformat()}
             message = "Zapisano ręczną datę. Użyj sort --dry-run, aby odświeżyć podgląd."
+        elif args.command == "search":
+            results = search_catalog(config, name=args.name, month=args.month, source=args.source)
+            details = {"Lokalizacje": results}
+            message = f"Liczba zapisanych lokalizacji · {len(results)}"
+        elif args.command == "conflicts":
+            if args.keep_both is None:
+                groups = list_conflicts(config)
+                details = {"Konflikty SORT": groups}
+                message = f"Liczba grup konfliktów · {len(groups)}"
+            else:
+                keep_both(config, args.keep_both)
+                details = {"Grupa": args.keep_both}
+                message = "Zapisano decyzję „zachowaj oba”."
+        elif args.command == "catalog-move":
+            current = record_manual_move(config, args.occurrence_id, args.target)
+            details = {"Poprzednie ID lokalizacji": args.occurrence_id, "Nowe ID lokalizacji": current}
+            message = "Zapisano zweryfikowaną zmianę lokalizacji."
         elif args.command == "reconcile":
             try:
                 details = reconcile_imports(config, args.audit)

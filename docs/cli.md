@@ -29,6 +29,9 @@ Use `media-archive` or `python -m media_archive`. Put `--config FILE` before the
 | `sort --dry-run [--report]` | Read staged media and preview [SORT destinations](sort-planning.md), including files awaiting a valid date. |
 | `sort` | [Place verified imports](sort.md) in their collections or the unresolved directory and save a text and JSON report. |
 | `sort-date ID YYYY-MM-DD` | Set the intended calendar date for a pending import in SQLite. |
+| `search [--name TEXT] [--month YYYY-MM] [--source TYPE:PROFILE]` | Search [saved media locations](catalog.md#search). |
+| `conflicts [--keep-both GROUP]` | List [SORT conflicts](catalog.md#review-decisions) or save a review decision. |
+| `catalog-move ID ABSOLUTE_PATH` | Verify an [existing manual move](catalog.md#reconcile-a-manual-move) and update the catalog. |
 
 All commands that need existing state report a missing database as an error. Setup and migration use the [SQLite lifecycle](state.md#first-setup-and-upgrades). The configuration wizard is a separate planned feature. Camera import uses the [journal](journal.md) and [history](history.md).
 

@@ -1,6 +1,6 @@
 # Executing SORT
 
-Run `media-archive migrate` for an existing database to enable revision `0009`. Review the [metadata and destination preview](sort-planning.md), then run:
+Run `media-archive migrate` for an existing database to enable SORT and its catalog. Review the [metadata and destination preview](sort-planning.md), then run:
 
 ```bash
 media-archive sort --dry-run
@@ -11,7 +11,7 @@ SORT works from verified imports on registered local volumes. A file with a date
 
 ## Publication and collisions
 
-SORT locks the working directories and the relevant collection roots. It rechecks the registered volumes and records the selected destination, date and metadata in the journal. At the destination it checks case, Unicode normalization and ambiguous names. An existing verified file of the same content can be reused. If the name belongs to different content, SORT preserves it and adds a SHA-256 suffix starting at eight characters to the new variant. The suffix grows when required. A durable conflict group records the known variants and their original name and paths. Catalog browsing and marking conflicts resolved are a separate task.
+SORT locks the working directories and the relevant collection roots. It rechecks the registered volumes and records the selected destination, date and metadata in the journal. At the destination it checks case, Unicode normalization and ambiguous names. An existing verified file of the same content can be reused. If the name belongs to different content, SORT preserves it and adds a SHA-256 suffix starting at eight characters to the new variant. The suffix grows when required. A durable conflict group records the known variants and their original name and paths. Use [conflict review](catalog.md#review-decisions) to inspect variants and record a decision.
 
 On the same mount, SORT can publish a hard link directly under the final name after verifying the working file. Across mounts, when hard links are unavailable or when the working inode already has other names, SORT uses rsync and checks the remaining space reserve. The copy path requires a non-overwriting rename for publication. SORT commits the result before removing its previous working copy and rechecks the published copy before unlinking. It retains the working copy if the destination is uncertain. Embedded metadata and file contents are preserved.
 

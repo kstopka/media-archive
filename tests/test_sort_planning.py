@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 import zlib
 
 from media_archive.cli import main
+from media_archive.catalog import list_conflicts, search_catalog
 from media_archive._transfer_files import Destination, Part
 from media_archive.config import load_config
 from media_archive.devices import registered_volume
@@ -61,7 +62,7 @@ class SortPlanningTests(unittest.TestCase):
         initialize_database(self.config)
         self.volume = self.config.local.volumes[0]
         self.volume.root.mkdir(parents=True)
-        for module in ("sort_planning", "sort_execution", "transfer", "import_restore"):
+        for module in ("sort_planning", "sort_execution", "transfer", "import_restore", "catalog"):
             self.enterContext(patch(f"media_archive.{module}.verify_volume",
                                     side_effect=lambda *_, **__: mounted(self.volume.root)))
 
@@ -351,3 +352,81 @@ class SortPlanningTests(unittest.TestCase):
         with open_database(self.database) as connection:
             self.assertIsNotNone(load_reconciliation(connection))
         self.assertEqual(moved.item.target.read_bytes(), _photo())
+
+    @unittest.skipUnless(shutil.which("exiftool"), "requires ExifTool")
+    def test_catalog_keeps_conflict_history_and_verifies_manual_moves(self) -> None:
+        sample = _movie(datetime(2025, 2, 5, tzinfo=timezone.utc))
+        import_id, _ = self._import(Path("/camera/clip.mp4"), sample)
+        plan, = plan_sort(self.config)
+        existing = plan.target
+        existing.parent.mkdir(parents=True)
+        existing.write_bytes(b"older variant")
+        result, = execute_sort(self.config)
+        placed = result.item.target
+        self.assertNotEqual(placed, existing)
+        group, = list_conflicts(self.config)
+        self.assertEqual(len(group["warianty"]), 2)
+        self.assertIn("do przejrzenia", self._cli("conflicts"))
+        self._cli("conflicts", "--keep-both", group["grupa"])
+        self.assertEqual(placed.read_bytes(), sample)
+        self.assertEqual(existing.read_bytes(), b"older variant")
+        self.assertIn("zachowaj oba", self._cli("conflicts"))
+
+        known = next(item for item in group["warianty"] if Path(item["ścieżka"]) == placed)
+        target = self.config.collection("photos_main").local_root / "renamed.mp4"
+        target.write_bytes(sample)
+        self.assertIn("nadal znajduje się",
+                      self._cli("catalog-move", str(known["id_lokalizacji"]), str(target), expected=1))
+        placed.unlink()
+        target.write_bytes(b"x" * len(sample))
+        before = self.database.read_bytes()
+        self.assertIn("SHA-256", self._cli("catalog-move", str(known["id_lokalizacji"]), str(target), expected=1))
+        self.assertEqual(self.database.read_bytes(), before)
+        target.write_bytes(sample)
+        self._cli("catalog-move", str(known["id_lokalizacji"]), str(target))
+        updated, = search_catalog(self.config, name="renamed", source=("phone", "main"), month="2025-02")
+        self.assertEqual(updated["ścieżka"], str(target))
+        self.assertEqual(target.read_bytes(), sample)
+        with open_database(self.database) as connection:
+            placement = history.load_placement(connection, import_id)
+            self.assertEqual(placement.local_occurrence_id, known["id_lokalizacji"])
+
+        existing.unlink()
+        reviewed, = list_conflicts(self.config)
+        self.assertIsNotNone(reviewed["zachowaj_oba_od"])
+        self.assertEqual(len(reviewed["warianty"]), 2)
+        moved = next(item for item in reviewed["warianty"] if Path(item["ścieżka"]) == placed)
+        self.assertEqual(moved["przeniesiono_do"], str(target))
+
+    @unittest.skipUnless(shutil.which("exiftool"), "requires ExifTool")
+    def test_catalog_move_links_every_import_that_reused_the_same_copy(self) -> None:
+        sample = _movie(datetime(2025, 2, 5, tzinfo=timezone.utc))
+        first, _ = self._import(Path("/camera/clip.mp4"), sample)
+        placed, = execute_sort(self.config)
+        second, _ = self._import(Path("/camera/clip.mp4"), sample)
+        reused, = execute_sort(self.config)
+        self.assertEqual(reused.item.target, placed.item.target)
+        self._import(Path("/camera/other.mp4"), sample)
+        other, = execute_sort(self.config)
+        with open_database(self.database) as connection:
+            old_ids = [history.load_placement(connection, item).local_occurrence_id for item in (first, second)]
+        self.assertNotEqual(*old_ids)
+
+        destination = placed.item.target.with_name("renamed.mp4")
+        placed.item.target.rename(destination)
+        self._cli("catalog-move", str(old_ids[0]), str(destination))
+
+        rows = search_catalog(self.config)
+        current, = (item for item in rows if item["ścieżka"] == str(destination))
+        previous = {item["id"]: item for item in rows if item["ścieżka"] == str(placed.item.target)}
+        self.assertEqual(set(previous), set(old_ids))
+        for item in previous.values():
+            self.assertEqual(item["obecność"], "przeniesiono")
+            self.assertEqual(item["następna_lokalizacja"], current["id"])
+        separate, = (item for item in rows if item["ścieżka"] == str(other.item.target))
+        self.assertIsNone(separate["następna_lokalizacja"])
+        self.assertEqual(other.item.target.read_bytes(), sample)
+        self.assertEqual(destination.read_bytes(), sample)
+        with open_database(self.database) as connection:
+            self.assertEqual([history.load_placement(connection, item).local_occurrence_id
+                              for item in (first, second)], old_ids)

@@ -1,6 +1,6 @@
 # SORT metadata and preview
 
-Run `media-archive migrate` once if the existing database predates revision `0009`. SORT planning needs the registered working volume and ExifTool on `PATH`. It reads staged or unresolved copies without requiring the original phone, card or archive drives.
+Run `media-archive migrate` if the existing database is behind the current revision. SORT planning needs the registered working volume and ExifTool on `PATH`. It reads staged or unresolved copies without requiring the original phone, card or archive drives.
 
 ```bash
 media-archive sort --dry-run

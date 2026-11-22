@@ -58,7 +58,7 @@ After acceptance, inventory/audit can be used without waiting for IMPORT/SORT/BA
 - [x] **5.1 ExifTool metadata.** Read photo capture dates and convert UTC movie-header timestamps without editing media. See [SORT metadata](sort-planning.md).
 - [x] **5.2 Destination/date planning.** Preview configured date layouts and unresolved paths, and record manual dates by import ID. See [SORT preview](sort-planning.md).
 - [x] **5.3 SORT execution and conflicts.** [Publish and verify placements](sort.md) before removing working copies. Preserve name conflicts with hash suffixes and durable variants, and resume interrupted moves.
-- [ ] **5.4 Search and conflict review.** Search by name/month/source, show last-known offline locations and reconcile manual moves. Resolving a conflict as “keep both” must not delete either variant.
+- [x] **5.4 Search and conflict review.** [Search the catalog](catalog.md) by name/month/source, show last-known offline locations and reconcile manual moves. Resolving a conflict as “keep both” must not delete either variant.
 
 ## Stage 6 — BACKUP with mandatory snapshots
 

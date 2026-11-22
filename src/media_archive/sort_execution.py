@@ -124,9 +124,22 @@ def _schedule(config: Configuration, item: SortItem, locks: OperationLocks) -> i
             target_occurrence_id=occurrence, required_resources=resources,
         )
         sort_moves.record_move(connection, operation, item.import_id, origin.id)
-        for path, digest in alternatives:
-            variant = history.record_content(connection, digest.sha256, digest.size)
-            sort_moves.record_conflict_member(connection, choice.group_path, item.name, variant, volume_id, path.as_posix())
+        if alternatives:
+            run = history.create_run(connection)
+            observed_at = datetime.now(timezone.utc)
+            for path, digest in alternatives:
+                variant = history.record_content(connection, digest.sha256, digest.size)
+                sort_moves.record_conflict_member(connection, choice.group_path, item.name, variant, volume_id,
+                                                  path.as_posix())
+                if target_kind == "local":
+                    previous = next((row.id for row in history.load_occurrences(connection, "local", path.as_posix())
+                                     if (row.content_id, row.volume_id, row.collection_id)
+                                     == (variant, volume_id, profile.collection_id)), None)
+                    if previous is None:
+                        previous = history.record_occurrence(connection, "local", path.as_posix(), content_id=variant,
+                                                             collection_id=profile.collection_id, volume_id=volume_id)
+                    history.record_verification(connection, previous, run, verified_at=observed_at, scope="full",
+                                                read_sha256=digest.sha256, bytes_read=digest.size)
     return operation
 
 

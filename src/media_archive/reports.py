@@ -59,6 +59,22 @@ class Report:
                 if not summary_only and value:
                     lines.append(key)
                     lines.extend(f"- {item['ścieżka']} · {item['decyzja']}" for item in value)
+            elif key == "Lokalizacje":
+                for item in value:
+                    lines.append(f"- Lokalizacja {item['id']} · {item['ścieżka']} · {item['nośnik'] or item['rodzaj']}"
+                                 f" · {item['dostępność']} · {item['obecność']}")
+                    if item["następna_lokalizacja"] is not None:
+                        lines.append(f"  Następna lokalizacja · {item['następna_lokalizacja']}")
+            elif key == "Konflikty SORT":
+                for group in value:
+                    status = "zachowaj oba" if group["zachowaj_oba_od"] else "do przejrzenia"
+                    lines.append(f"- Grupa {group['grupa']} · {group['nazwa']} · {status}")
+                    for item in group["warianty"]:
+                        lines.append(f"  {item['ścieżka']} · wolumin {item['id_woluminu']} · SHA-256 {item['sha256']}")
+                        if item["przeniesiono_do"] is not None:
+                            lines.append(f"  Przeniesiono do {item['przeniesiono_do']}")
+                        if item["id_lokalizacji"] is not None:
+                            lines.append(f"  ID lokalizacji · {item['id_lokalizacji']}")
             elif key == "Plan SORT":
                 for item in value:
                     line = f"- Import {item['id_importu']} · {item['plik']} · {item['stan']}"
