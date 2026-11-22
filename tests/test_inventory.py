@@ -18,6 +18,8 @@ from media_archive.state import DeviceKey, StateError, open_database
 from media_archive.state.history import load_source_id, record_observation
 from media_archive.state.initialization import load_baseline_skips, load_initialization
 from media_archive.state.registry import initialize_database
+from media_archive.state.reconciliation import load_reconciliation
+from media_archive.state.snapshots import create_snapshot, restore_snapshot
 from tests.config_fixtures import registry_values, write_config
 
 
@@ -261,6 +263,63 @@ class InventoryTests(unittest.TestCase):
             self.assertEqual(load_initialization(connection, source_id).status, "completed")
             self.assertEqual([row.occurrence_id for row in load_baseline_skips(connection, source_id)],
                              [rows["previously-selected.jpg"]["wystąpienie"]])
+
+    def test_restore_requires_fresh_full_archive_evidence_for_archive_only_baseline(self) -> None:
+        root = self.settings.parent / "synthetic-phone"
+        root.mkdir()
+        (root / "existing.jpg").write_bytes(b"archived")
+        self._archive_copy("photos_main", "archived.jpg", b"archived")
+        with patch("media_archive.phone_initialization.open_adb_source", return_value=self._phone_source(root)):
+            self._cli("init-phone", "main", expected=3)
+        self._cli("inventory", "--hash-local")
+        command = ("audit", "--mode", "full", "--group", "data", "--targets", "a", "b")
+        old = self._cli(*command)["ID audytu"]
+        self._cli("init-phone", "main", "--audit", old)
+        generations = self.settings.parent / "generations"
+        generations.mkdir()
+        generation = create_snapshot(self.config, generations)
+        restore_snapshot(self.config, generation)
+        self._cli("reconcile", expected=3)
+        self._cli("reconcile", "--audit", old, expected=3)
+        with open_database(self.config.app.database_file) as connection:
+            self.assertIsNotNone(load_reconciliation(connection))
+        new = self._cli(*command)["ID audytu"]
+        with patch("media_archive.import_restore.verify_volume",
+                   side_effect=lambda config, key: self._verify(config, key, None)):
+            outcome = self._cli("reconcile", "--audit", new)
+        self.assertEqual(outcome["Pełne audyty użyte do uzgodnienia"], 1)
+        with open_database(self.config.app.database_file) as connection:
+            self.assertIsNone(load_reconciliation(connection))
+
+    def test_restore_keeps_marker_until_a_recorded_local_baseline_copy_matches(self) -> None:
+        root = self.settings.parent / "synthetic-phone"
+        root.mkdir()
+        (root / "existing.jpg").write_bytes(b"local")
+        collection = self.config.collection("photos_main")
+        primary = collection.local_root / "first.jpg"
+        duplicate = collection.local_root / "second.jpg"
+        primary.write_bytes(b"local")
+        duplicate.write_bytes(b"local")
+        with patch("media_archive.phone_initialization.open_adb_source", return_value=self._phone_source(root)):
+            self._cli("init-phone", "main", expected=3)
+        self._cli("inventory", "--hash-local")
+        audit = self._cli("audit", "--mode", "full", "--group", "data", "--targets", "a", "b")
+        self._cli("init-phone", "main", "--audit", audit["ID audytu"])
+        generations = self.settings.parent / "generations"
+        generations.mkdir()
+        snapshot = create_snapshot(self.config, generations)
+        primary.unlink()
+        duplicate.write_bytes(b"other")
+        restore_snapshot(self.config, snapshot)
+        self._cli("reconcile", expected=3)
+        with open_database(self.config.app.database_file) as connection:
+            self.assertIsNotNone(load_reconciliation(connection))
+        duplicate.write_bytes(b"local")
+        with patch("media_archive.import_restore.verify_volume",
+                   side_effect=lambda config, key: self._verify(config, key, None)):
+            self._cli("reconcile")
+        with open_database(self.config.app.database_file) as connection:
+            self.assertIsNone(load_reconciliation(connection))
 
     def test_import_missing_keeps_archive_only_file_pending_for_local_copy(self) -> None:
         root = self.settings.parent / "synthetic-phone"

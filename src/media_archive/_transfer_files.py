@@ -139,6 +139,16 @@ class Destination:
                 raise StateError("Nie można wiarygodnie oszacować miejsca na stagingu.")
             return info.f_bavail * unit, unit
 
+    def file_size(self) -> int | None:
+        """Check that the destination is a regular file on the expected mount."""
+        try:
+            with self.parent() as parent:
+                fd = os.open(self.path.name, os.O_PATH | os.O_NOFOLLOW, dir_fd=parent)
+                with _file(fd, self.volume.mount_id):
+                    return os.fstat(fd).st_size
+        except FileNotFoundError:
+            return None
+
     def recover_digest(self) -> SourceDigest | None:
         """Return fresh proof of an existing regular file, or confirmed absence."""
         try:

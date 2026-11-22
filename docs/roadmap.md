@@ -51,7 +51,7 @@ After acceptance, inventory/audit can be used without waiting for IMPORT/SORT/BA
 - [x] **4.2 Import planning.** Build read-only previews and record source observations through the same [planner API](import-planning.md). Apply per-profile dispositions, exact reimport and staging-space preflight.
 - [x] **4.3 Camera import.** [Import camera card videos and photos](camera-import.md) to staging with verified transfers and per-profile history. Preserve the card, report skipped formats and stop on a hash mismatch.
 - [x] **4.4 Phone import through ADB.** Apply baseline dispositions and import new content, handling authorization/offline states. Preserve phone originals. See [phone import](phone-import.md).
-- [ ] **4.5 Resume and import history.** Journal attempts, reconcile interruptions and retain history after manual selection. Distinguish verified import, staging presence and completed collection placement. Missing staging before SORT completion requires a visible pending-material error and explicit reimport. Failed/unverified transfers cannot produce success records.
+- [x] **4.5 Resume and import history.** [Resume attempts and reconcile restored import state](import-recovery.md). Retain import history after manual selection and require explicit reimport for missing staging before SORT completion.
 
 ## Stage 5 — SORT and catalog
 

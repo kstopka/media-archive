@@ -57,6 +57,7 @@ Paths below are relative to the repository root.
 | [import_planning.py](../src/media_archive/import_planning.py) | Build a source manifest, apply profile history and check staging space |
 | [camera_import.py](../src/media_archive/camera_import.py) | Camera entry point and shared import execution through the transfer and journal APIs |
 | [phone_import.py](../src/media_archive/phone_import.py) | Import phone media through ADB and complete baseline processing |
+| [import_recovery.py](../src/media_archive/import_recovery.py), [import_restore.py](../src/media_archive/import_restore.py) | Resume a saved import or reconcile staging and archive evidence after restore |
 | [state/database.py](../src/media_archive/state/database.py) | Explicit creation/opening, connection lifetime, short transactions and migration entry point |
 | [state/migrations.py](../src/media_archive/state/migrations.py) | Application identity, Alembic revision validation and migration entry point |
 | [state/registry.py](../src/media_archive/state/registry.py) | Trusted identity reads, configuration checks and explicit registration |

@@ -12,6 +12,7 @@ from typing import BinaryIO
 
 from media_archive._encoding import require_utf8
 from media_archive.config import ConfigError, Configuration
+from media_archive.config.models import LocalVolume
 from media_archive.state import DeviceKey, RegisteredDevice, StateError, load_registered_devices
 from media_archive.state._installation import installation_lock
 
@@ -186,6 +187,14 @@ def registered_volume(config: Configuration, key: DeviceKey) -> RegisteredDevice
     if registered is None:
         raise ConfigError("Wolumin nie ma zarejestrowanego powiązania.")
     return registered
+
+
+def staging_volume(config: Configuration) -> LocalVolume:
+    """Return the configured local volume that owns the staging directory."""
+    for volume in config.local.volumes:
+        if config.local.staging_root.is_relative_to(volume.root):
+            return volume
+    raise StateError("Staging musi leżeć na zarejestrowanym woluminie lokalnym.")
 
 
 @contextmanager

@@ -14,13 +14,18 @@ from unittest.mock import patch
 
 from media_archive.cli import main
 from media_archive.camera_import import import_camera
+from media_archive._transfer_files import Part
 from media_archive.config import load_config
 from media_archive.devices import MountedVolume, _mount_id, registered_volume
 from media_archive.import_planning import plan_import
+from media_archive.import_recovery import resume_import
+from media_archive.import_restore import reconcile_imports
 from media_archive.sources import LocalSource
 from media_archive.state import DeviceChange, DeviceKey, StateError, open_database, register_configuration, transaction
 from media_archive.state import history, journal
 from media_archive.state.registry import initialize_database
+from media_archive.state.reconciliation import load_reconciliation
+from media_archive.state.snapshots import create_snapshot, restore_snapshot
 from tests.config_fixtures import registry_values, write_config
 
 
@@ -50,7 +55,9 @@ class ImportPlanningTests(unittest.TestCase):
         self.enterContext(patch("media_archive.import_planning.open_camera_source", side_effect=self._camera))
         self.enterContext(patch("media_archive.import_planning.verify_volume", side_effect=self._staging))
         self.enterContext(patch("media_archive.camera_import.open_camera_source", side_effect=self._camera))
+        self.enterContext(patch("media_archive.import_recovery.open_camera_source", side_effect=self._camera))
         self.enterContext(patch("media_archive.transfer.verify_volume", side_effect=self._staging))
+        self.enterContext(patch("media_archive.import_restore.verify_volume", side_effect=self._staging))
 
     @contextmanager
     def _camera(self, config, profile, card, mount):
@@ -58,9 +65,8 @@ class ImportPlanningTests(unittest.TestCase):
         with mounted(self.card) as volume:
             yield LocalSource(volume, self.camera_root)
 
-    def _staging(self, config, key, *, writable):
+    def _staging(self, config, key, *, writable=False):
         self.assertEqual(key, DeviceKey("local", self.config.local.volumes[0].alias))
-        self.assertTrue(writable)
         return mounted(self.volume)
 
     def _plan(self, **kwargs):
@@ -77,7 +83,99 @@ class ImportPlanningTests(unittest.TestCase):
             staging = history.record_occurrence(con, "staging", str(self.root / "old.jpg"), content_id=content)
             proof = history.record_verification(con, staging, run, verified_at=datetime.now(timezone.utc),
                                                 scope="full", read_sha256=digest, bytes_read=len(data))
-            return history.record_import(con, source, proof)
+            imported = history.record_import(con, source, proof)
+            collection = self.config.collection("photos_main" if phone else "gopro")
+            local = history.record_occurrence(con, "local", str(collection.local_root / "selected.jpg"),
+                                              content_id=content, collection_id=collection.id)
+            final = history.record_verification(con, local, run, verified_at=datetime.now(timezone.utc), scope="full",
+                                               read_sha256=digest, bytes_read=len(data))
+            history.record_placement(con, imported, final)
+            return imported
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_missing_staging_requires_explicit_reimport_and_keeps_history(self) -> None:
+        (self.camera_root / "copy.jpg").write_bytes(b"sample")
+        destination = self._plan().transfers[0].destination
+        self._live_cli()
+        destination.unlink()
+        outcome, _ = self._live_cli(expected=3)
+        missing, = outcome["Brakujące materiały w stagingu"]
+        self.assertFalse(missing["reimport zaplanowany"])
+        self.assertEqual(outcome["Zaimportowano plików"], 0)
+        recovered = import_camera(self.config, "hero8", card="a", mount=self.card, reimport=["copy.jpg"])
+        self.assertEqual(recovered.code, 0)
+        self.assertFalse(destination.exists())
+        self.assertEqual(recovered.plan.transfers[0].destination.read_bytes(), b"sample")
+        self.assertEqual(self._plan().transfers, ())
+        with open_database(self.database) as con:
+            self.assertEqual(len(history.load_imports(con, recovered.plan.source_id)), 2)
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_resume_after_publication_checks_disk_without_opening_source(self) -> None:
+        clip = self.camera_root / "clip.MP4"
+        clip.write_bytes(b"video")
+        publish = Part.publish
+
+        def interrupt_after_publish(part, *args):
+            publish(part, *args)
+            raise KeyboardInterrupt
+
+        with patch.object(Part, "publish", new=interrupt_after_publish):
+            first = import_camera(self.config, "hero8", card="a", mount=self.card)
+        self.assertEqual(first.code, 130)
+        operation = first.results[0].operation_id
+        self.assertIn(f"resume {operation}", " ".join(self._plan().problems))
+        destination = first.plan.transfers[0].destination
+        destination.write_bytes(b"other")
+        self.assertEqual(resume_import(self.config, operation)[0], 3)
+        self.assertEqual(destination.read_bytes(), b"other")
+        destination.write_bytes(b"video")
+        clip.unlink()
+        output = StringIO()
+        with redirect_stdout(output), redirect_stderr(output):
+            code = main(["--config", str(self.settings), "resume", str(operation)])
+        self.assertEqual(code, 0, output.getvalue())
+        self.assertEqual(resume_import(self.config, operation)[0], 0)
+        with open_database(self.database) as con:
+            self.assertEqual(len(history.load_imports(con, first.plan.source_id)), 1)
+            self.assertEqual([attempt.state for attempt in journal.load_attempts(con, operation)],
+                             ["needs_review", "needs_review", "committed"])
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_restore_blocks_unknown_staging_then_reconciles_pending_publication(self) -> None:
+        (self.camera_root / "clip.MP4").write_bytes(b"video")
+        with patch.object(Part, "publish", side_effect=KeyboardInterrupt):
+            first = import_camera(self.config, "hero8", card="a", mount=self.card)
+        operation = first.results[0].operation_id
+        destination = first.plan.transfers[0].destination
+        generations = self.root / "generations"
+        generations.mkdir()
+        snapshot = create_snapshot(self.config, generations)
+        code, _, _ = resume_import(self.config, operation, card="a", mount=self.card)
+        self.assertEqual(code, 0)
+        self.assertEqual(destination.read_bytes(), b"video")
+        restore_snapshot(self.config, snapshot)
+        unrelated = self.config.local.staging_root / "unrelated.jpg"
+        unrelated.write_bytes(b"unknown")
+        with self.assertRaisesRegex(StateError, "nierozpoznany"):
+            reconcile_imports(self.config)
+        with open_database(self.database) as con:
+            self.assertIsNotNone(load_reconciliation(con))
+            self.assertEqual(history.load_imports(con, first.plan.source_id), ())
+        unrelated.rename(self.root / unrelated.name)
+        saved_copy = self.root / "known-copy"
+        destination.rename(saved_copy)
+        destination.mkdir()
+        with self.assertRaisesRegex(StateError, "Katalog zajmuje"):
+            reconcile_imports(self.config)
+        destination.rmdir()
+        saved_copy.rename(destination)
+        result = reconcile_imports(self.config)
+        self.assertEqual(result["Zatwierdzone próby"], 1)
+        with open_database(self.database) as con:
+            self.assertIsNone(load_reconciliation(con))
+            self.assertEqual(len(history.load_imports(con, first.plan.source_id)), 1)
+        self.assertEqual(self._plan().transfers, ())
 
     def test_manifest_hashes_content_and_isolates_history_by_profile(self) -> None:
         self._imported(b"cross", phone=True)

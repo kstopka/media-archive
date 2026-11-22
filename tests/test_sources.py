@@ -17,6 +17,7 @@ from unittest.mock import patch
 from media_archive.cli import main
 from media_archive.config import ConfigError, load_config
 from media_archive.devices import MountedVolume, _mount_id
+from media_archive.import_recovery import resume_import
 from media_archive.phone_import import import_phone
 from media_archive.sources import ReadCancelled, SourceDigest, hash_source_file, open_adb_source, open_camera_source
 from media_archive.state import (
@@ -172,10 +173,38 @@ esac
         with open_database(self.config.app.database_file) as connection:
             self.assertEqual(history.load_imports(connection, source_id), ())
         status.write_text("device", encoding="utf-8")
-        result = import_phone(self.config, "main")
-        self.assertEqual(result.code, 0)
-        self.assertEqual([item.path.name for item in result.results], ["new.jpg"])
+        self.assertEqual(resume_import(self.config, failed.results[0].operation_id)[0], 0)
+        self.assertEqual(import_phone(self.config, "main").results, ())
+        with open_database(self.config.app.database_file) as connection:
+            recorded, = history.load_imports(connection, source_id)
+            source = history.load_occurrence(connection, recorded.source_occurrence_id)
+            self.assertEqual(Path(source.path).name, "new.jpg")
         self.assertEqual((self.android / "skip.jpg").read_bytes(), b"skip")
+
+    def test_phone_baseline_can_explicitly_reimport_missing_staging_before_completion(self) -> None:
+        self._fake_adb()
+        self._import_staging()
+        source_id = self._import_baseline("import_missing", {"a.jpg": b"first", "b.mp4": b"second"})
+        (self.android / "a.jpg").write_bytes(b"first")
+        first = import_phone(self.config, "main")
+        self.assertEqual(first.code, 3)
+        (staged,) = first.plan.transfers
+        self.assertFalse(import_phone(self.config, "main", reimport=["a.jpg"]).plan.ready)
+        staged.destination.unlink()
+        (self.android / "b.mp4").write_bytes(b"second")
+        (self.android / "renamed.jpg").write_bytes(b"first")
+        blocked = import_phone(self.config, "main")
+        self.assertEqual(blocked.code, 3)
+        self.assertEqual(len(blocked.plan.missing_staging), 1)
+        self.assertFalse(import_phone(self.config, "main", reimport=["renamed.jpg"]).plan.ready)
+        recovered = import_phone(self.config, "main", reimport=["a.jpg"])
+        self.assertEqual(recovered.code, 0)
+        self.assertEqual([(item.relative_path.name, item.decision) for item in recovered.plan.transfers],
+                         [("a.jpg", "reimport"), ("b.mp4", "copy")])
+        self.assertEqual(recovered.plan.transfers[0].destination.read_bytes(), b"first")
+        with open_database(self.config.app.database_file) as connection:
+            self.assertEqual(len(history.load_imports(connection, source_id)), 3)
+            self.assertEqual(initialization.load_initialization(connection, source_id).status, "completed")
 
     def test_camera_source_lists_attributes_and_reads_only_configured_tree(self) -> None:
         mount = self.root / "card"

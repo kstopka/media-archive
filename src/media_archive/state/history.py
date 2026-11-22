@@ -314,6 +314,10 @@ def load_source_id(connection: Connection, kind: Literal["phone", "camera"], ali
     return require_row(connection, registry.sources, kind=kind, alias=alias).id
 
 
+def load_source_profile(connection: Connection, source_id: int) -> RowMapping:
+    return require_row(connection, registry.sources, id=source_id)
+
+
 def load_observations(connection: Connection, occurrence_id: int) -> tuple[RowMapping, ...]:
     return tuple(connection.execute(
         history.observations.select().filter_by(occurrence_id=occurrence_id)
@@ -334,6 +338,26 @@ def load_imports(connection: Connection, source_id: int) -> tuple[RowMapping, ..
             history.imports, history.occurrences, history.imports.c.source_occurrence_id == history.occurrences.c.id,
         ).where(history.occurrences.c.source_id == source_id).order_by(history.imports.c.id)
     ).mappings())
+
+
+def load_staged_imports(connection: Connection, source_id: int | None = None) -> tuple[RowMapping, ...]:
+    """Read staging locations and placement state alongside each recorded import."""
+    source = history.occurrences.alias("import_source")
+    staging = history.occurrences.alias("import_staging")
+    query = (
+        select(history.imports.c.id, source.c.source_id, source.c.content_id, staging.c.id.label("occurrence_id"),
+               staging.c.path, staging.c.volume_id, history.contents.c.sha256, history.contents.c.size,
+               history.placements.c.import_id.label("placement_id"))
+        .select_from(history.imports)
+        .join(source, source.c.id == history.imports.c.source_occurrence_id)
+        .join(staging, staging.c.id == history.imports.c.staging_occurrence_id)
+        .join(history.contents, history.contents.c.id == source.c.content_id)
+        .outerjoin(history.placements, history.placements.c.import_id == history.imports.c.id)
+        .order_by(history.imports.c.id)
+    )
+    if source_id is not None:
+        query = query.where(source.c.source_id == source_id)
+    return tuple(connection.execute(query).mappings())
 
 
 def load_imported_contents(connection: Connection, source_id: int, *,

@@ -17,11 +17,12 @@ from media_archive._media_formats import CAMERA_MEDIA, PHONE_MEDIA, media_extens
 from media_archive._transfer_files import Destination, TransferConflict
 from media_archive.audit import _Scan, _scan
 from media_archive.config import ConfigError, Configuration
-from media_archive.devices import registered_volume, verify_volume
+from media_archive.devices import registered_volume, staging_volume, verify_volume
+from media_archive.import_journal import import_operation_key
 from media_archive.operations import check_application_paths
 from media_archive.sources import ReadCancelled, hash_source_file, open_adb_source, open_camera_source
 from media_archive.state import DeviceKey, StateError, open_database, transaction, validate_registered_configuration
-from media_archive.state import history
+from media_archive.state import history, journal
 from media_archive.state.initialization import Initialization, load_initialization
 from media_archive.state.locking import (
     OperationLocks, Resource, canonical_path, installation_lock, lock_resources, require_locks,
@@ -47,6 +48,14 @@ class ImportItem:
 
 
 @dataclass(frozen=True)
+class MissingStaging:
+    import_id: int
+    path: str
+    sha256: str
+    reimport_planned: bool
+
+
+@dataclass(frozen=True)
 class ImportPlan:
     profile: str
     kind: Literal["phone", "camera"]
@@ -58,6 +67,7 @@ class ImportPlan:
     required_bytes: int = 0
     staging_volume_id: int | None = None
     observation_run_id: str | None = None
+    missing_staging: tuple[MissingStaging, ...] = ()
 
     @property
     def ready(self) -> bool:
@@ -112,9 +122,9 @@ def _requested_paths(reimport: Iterable[str | Path]) -> frozenset[Path]:
 
 
 def _baseline(connection: Connection, source_id: int, selection: _Selection, device_id: int,
-              requested: frozenset[Path]) -> tuple[dict[ContentIdentity, str], BaselineGaps | None]:
+              ) -> tuple[dict[ContentIdentity, str], BaselineGaps | None, BaselineGaps]:
     if selection.kind == "camera":
-        return {}, None
+        return {}, None, set()
     state = load_initialization(connection, source_id)
     comparison = next((scope for scope in state.scopes
                        if scope.phase == "comparison" and scope.scope == "copies" and scope.completed), None)
@@ -125,15 +135,21 @@ def _baseline(connection: Connection, source_id: int, selection: _Selection, dev
         boundary = json.loads(state.boundary)
         if boundary["device_id"] != device_id or boundary["root"] != selection.history_root.as_posix():
             raise StateError("Uzupełnienie bazowego spisu wymaga tego samego telefonu i katalogu źródłowego.")
-        if requested:
-            raise StateError("Ponowny import telefonu jest dostępny po zakończeniu jego inicjalizacji.")
     files = tuple(baseline_files(connection, source_id, state, comparison.cursor))
     decisions = {(digest, size): decision for decision, digest, size, _ in files}
     gaps = None
+    reimports = set()
     if pending:
-        gaps = {(Path(name).relative_to(selection.history_root), (digest, size))
-                for digest, size, name in unfilled_baseline(connection, source_id, device_id, files)}
-    return decisions, gaps
+        unfilled = unfilled_baseline(connection, source_id, device_id, files)
+        gaps = set()
+        for decision, digest, size, name in files:
+            if decision == "missing_local":
+                item = Path(name).relative_to(selection.history_root), (digest, size)
+                if (digest, size, name) in unfilled:
+                    gaps.add(item)
+                else:
+                    reimports.add(item)
+    return decisions, gaps, reimports
 
 
 def baseline_files(
@@ -202,7 +218,7 @@ def _read_manifest(config: Configuration, profile: str, selection: _Selection, m
 
 def _decisions(config: Configuration, plan: ImportPlan, imported: dict[ContentIdentity, int],
                baseline: dict[ContentIdentity, str], gaps: BaselineGaps | None,
-               requested: frozenset[Path]) -> ImportPlan:
+               baseline_reimports: BaselineGaps, requested: frozenset[Path]) -> ImportPlan:
     items = []
     problems = list(plan.problems)
     accepted = set()
@@ -216,7 +232,11 @@ def _decisions(config: Configuration, plan: ImportPlan, imported: dict[ContentId
         prior = imported.get(identity)
         disposition = baseline.get(identity)
         selected = item.relative_path in requested
-        if selected and (prior is not None or disposition in ("existing_copy", "baseline_skip")):
+        if gaps is None:
+            reimport_allowed = prior is not None or disposition in ("existing_copy", "baseline_skip")
+        else:
+            reimport_allowed = (item.relative_path, identity) in baseline_reimports
+        if selected and reimport_allowed:
             accepted.add(item.relative_path)
             decision = "reimport"
         elif prior is not None and not (gaps is not None and (item.relative_path, identity) in gaps):
@@ -241,21 +261,43 @@ def _decisions(config: Configuration, plan: ImportPlan, imported: dict[ContentId
                 destination = directory / item.relative_path.name
         items.append(replace(item, decision=decision, destination=destination))
     if requested - accepted:
-        problems.append("Ponowny import wymaga dokładnej ścieżki do odczytanego pliku znanego w tym profilu.")
+        problems.append("Ponowny import wymaga dokładnej ścieżki do odczytanego pliku znanego w tym profilu."
+                        if gaps is None else "Podczas inicjalizacji można ponowić tylko zapisany import pliku bazowego.")
     if gaps and not any(item.destination is not None for item in items):
         problems.append("Inicjalizacja telefonu pozostaje otwarta; nie ma dostępnych plików do uzupełnienia.")
     return replace(plan, items=tuple(items), problems=tuple(dict.fromkeys(problems)))
 
 
-def _preflight(config: Configuration, plan: ImportPlan) -> ImportPlan:
+def _preflight(config: Configuration, plan: ImportPlan, connection: Connection, *, baseline_pending: bool) -> ImportPlan:
     staging = config.local.staging_root
-    volume = next((volume for volume in config.local.volumes if staging.is_relative_to(volume.root)), None)
-    if volume is None:
-        return replace(plan, problems=(*plan.problems, "Staging musi leżeć na zarejestrowanym woluminie lokalnym."))
-    key = DeviceKey("local", volume.alias)
+    with connection.begin():
+        latest = {entry.content_id: entry for entry in history.load_staged_imports(connection, plan.source_id)}
+    pending = [entry for entry in latest.values() if entry.placement_id is None]
+    copying = any(item.destination is not None for item in plan.items)
+    if not pending and not copying:
+        return plan
     try:
+        volume = staging_volume(config)
+        key = DeviceKey("local", volume.alias)
         volume_id = registered_volume(config, key).volume_id
-        with verify_volume(config, key, writable=True) as mounted:
+        with verify_volume(config, key, writable=copying) as mounted:
+            reimports = {(item.sha256, item.size) for item in plan.items if item.decision == "reimport"}
+            missing = []
+            missing_contents = set()
+            for entry in pending:
+                path = Path(entry.path)
+                if (entry.volume_id != volume_id or not path.is_relative_to(staging) or path == staging
+                        or Destination(mounted, path.relative_to(volume.root)).file_size() != entry.size):
+                    missing_contents.add((entry.sha256, entry.size))
+                    missing.append(MissingStaging(entry.id, entry.path, entry.sha256,
+                                                  (entry.sha256, entry.size) in reimports))
+            plan = replace(plan, missing_staging=tuple(missing))
+            if baseline_pending and reimports - missing_contents:
+                return replace(plan, problems=("Podczas inicjalizacji reimport wymaga brakującej kopii w stagingu.",))
+            if missing and not any(item.reimport_planned for item in missing):
+                return replace(plan, problems=("Brak oczekiwanego materiału w stagingu. Wskaż plik źródłowy przez --reimport.",))
+            if not copying:
+                return plan
             available, unit = Destination(mounted, staging.relative_to(volume.root) / "probe").space()
             required = 0
             new_parents: set[Path] = set()
@@ -270,6 +312,12 @@ def _preflight(config: Configuration, plan: ImportPlan) -> ImportPlan:
                     except TransferConflict:
                         item = replace(item, decision="destination_conflict")
                         problems.append("Zaplanowany plik stagingu już istnieje; nie zostanie nadpisany.")
+                        with connection.begin():
+                            operation = journal.find_operation(
+                                connection, import_operation_key(plan.kind, volume_id, item.destination),
+                            )
+                        if operation is not None:
+                            problems.append(f"Sprawdź zapisaną operację przez resume {operation.id} --dry-run.")
                 items.append(item)
             required += len(new_parents) * unit
             if available < required + plan.reserve_bytes:
@@ -326,15 +374,15 @@ def plan_import(config: Configuration, profile: str, *, card: str | None = None,
                 if load_reconciliation(connection) is not None:
                     return replace(plan, problems=("Przed planowaniem importu uzgodnij stan po przywróceniu bazy.",))
                 try:
-                    baseline, gaps = _baseline(connection, source_id, selection, device.device_id, requested)
+                    baseline, gaps, baseline_reimports = _baseline(connection, source_id, selection, device.device_id)
                 except StateError as error:
                     return replace(plan, problems=(str(error),))
                 imported = history.load_imported_contents(connection, source_id)
             items, problems = _read_manifest(config, profile, selection, mount, requested, announce, cancelled)
             plan = _decisions(config, replace(plan, items=tuple(items), problems=tuple(problems)),
-                              imported, baseline, gaps, requested)
-            if plan.ready and any(item.destination is not None for item in plan.items):
-                plan = _preflight(config, plan)
+                              imported, baseline, gaps, baseline_reimports, requested)
+            if plan.ready:
+                plan = _preflight(config, plan, connection, baseline_pending=gaps is not None)
             if record and plan.ready and any(item.sha256 is not None for item in plan.items):
                 return _record(connection, plan, selection, device.device_id, device.volume_id)
             return plan

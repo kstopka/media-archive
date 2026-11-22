@@ -2,14 +2,14 @@
 
 from collections.abc import Callable, Iterable
 from contextlib import AbstractContextManager, nullcontext
-from dataclasses import dataclass
-from hashlib import sha256
+from dataclasses import dataclass, replace
 import json
 from pathlib import Path
 from time import monotonic
 from typing import Literal
 
 from media_archive.config import ConfigError, Configuration
+from media_archive.import_journal import commit_import, import_operation_key
 from media_archive.import_planning import ImportItem, ImportPlan, plan_import
 from media_archive.sources import AdbSource, LocalSource, ReadCancelled, open_camera_source
 from media_archive.state import StateError, open_database, transaction
@@ -43,8 +43,7 @@ def _prepare(config: Configuration, plan: ImportPlan, item: ImportItem, locks: O
         source = history.load_occurrence(connection, item.source_occurrence_id)
         # The staging destination owns the operation. A retry can supply the
         # same content from a different folder or volume episode of the card.
-        fingerprint = json.dumps([plan.staging_volume_id, item.destination.as_posix()])
-        operation_key = f"{plan.kind}-import-" + sha256(fingerprint.encode("utf-8")).hexdigest()
+        operation_key = import_operation_key(plan.kind, plan.staging_volume_id, item.destination)
         existing = journal.find_operation(connection, operation_key)
         if existing is None:
             occurrence_id = history.record_occurrence(connection, "staging", item.destination.as_posix(),
@@ -92,6 +91,8 @@ def _import(config: Configuration, profile: str, kind: Literal["camera", "phone"
                 result = CameraImportResult(0, "Brak nowych plików do importu.", plan)
             else:
                 result = _execute(config, open_source, plan, locks, resource, announce, cancelled)
+            if result.code == 0 and any(not item.reimport_planned for item in plan.missing_staging):
+                return replace(result, code=3, message="Część wcześniejszych importów nadal wymaga jawnego reimportu.")
             return finish(config, plan, result) if finish is not None and result.code == 0 else result
 
 
@@ -121,10 +122,9 @@ def _execute(config: Configuration, open_source: Callable[[], AbstractContextMan
                     announce(f"Import {label} · plik {index}/{len(transfers)} · {item.size} bajtów.")
                     operation = _prepare(config, plan, item, locks, resource)
                     execute_transfer(config, operation, locks=locks, progress=progress, cancelled=cancelled,
+                                     source_occurrence_id=item.source_occurrence_id,
                                      open_source=lambda: nullcontext((source, item.relative_path)),
-                                     record_result=lambda connection, proof: history.record_import(
-                                         connection, item.source_occurrence_id, proof,
-                                     ))
+                                     record_result=lambda connection, proof: commit_import(connection, operation, proof))
                 except (KeyboardInterrupt, ReadCancelled):
                     results.append(CameraImportItem(item.relative_path, item.size, "interrupted", operation))
                     raise

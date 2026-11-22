@@ -11,6 +11,8 @@ from media_archive.camera_import import import_camera
 from media_archive.config import ConfigError, load_config
 from media_archive.full_audit import full_audit
 from media_archive.import_planning import ImportPlan, plan_import
+from media_archive.import_recovery import resume_import
+from media_archive.import_restore import reconcile_imports
 from media_archive.inventory import inventory
 from media_archive.phone_initialization import initialize_phone
 from media_archive.phone_import import import_phone
@@ -60,6 +62,11 @@ def _import_details(plan: ImportPlan) -> dict[str, object]:
         details["Wolne bajty na stagingu"] = plan.available_bytes
     if plan.problems:
         details["Przyczyny blokady"] = plan.problems
+    if plan.missing_staging:
+        details["Brakujące materiały w stagingu"] = [
+            {"id_importu": item.import_id, "staging": item.path, "sha256": item.sha256,
+             "reimport zaplanowany": item.reimport_planned} for item in plan.missing_staging
+        ]
     details["Manifest importu"] = [
         {"ścieżka": item.relative_path.as_posix(), "bajty": item.size, "sha256": item.sha256,
          "decyzja": _IMPORT_DECISIONS[item.decision],
@@ -83,8 +90,12 @@ def _parser() -> argparse.ArgumentParser:
     setup.add_argument("--yes", action="store_true", help="potwierdź utworzenie bazy i zapis rejestru")
     migrate = commands.add_parser("migrate", help="zaktualizuj schemat istniejącej bazy")
     commands.add_parser("pending", help="wyświetl niedokończone operacje")
-    resume = commands.add_parser("resume", help="pokaż plan wznowienia operacji")
+    resume = commands.add_parser("resume", help="wznów import albo pokaż plan odzyskiwania")
     resume.add_argument("operation_id", type=_operation_id, metavar="ID_OPERACJI")
+    resume.add_argument("--card", metavar="KARTA")
+    resume.add_argument("--mount", type=Path, metavar="KATALOG")
+    reconcile = commands.add_parser("reconcile", help="uzgodnij stan importu po przywróceniu bazy")
+    reconcile.add_argument("--audit", action="append", default=[], metavar="ID_AUDYTU")
     snapshot = commands.add_parser("snapshot", help="zapisz generację stanu")
     snapshot.add_argument("directory", type=Path, metavar="KATALOG")
     verify = commands.add_parser("verify-snapshot", help="sprawdź zapisaną generację")
@@ -135,7 +146,7 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         parser.error("Użyj setup --dry-run, aby zobaczyć plan, albo setup --yes, aby go wykonać.")
     if args.command == "restore" and (args.config is None or not args.yes):
         parser.error("Użyj --config PLIK restore GENERACJA --yes.")
-    if args.command == "import" and (args.card is None) != (args.mount is None):
+    if args.command in ("import", "resume") and (args.card is None) != (args.mount is None):
         parser.error("Import z karty wymaga jednocześnie --card i --mount.")
     if args.command == "audit":
         if args.resume is not None:
@@ -166,7 +177,8 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if args.command == "device":
         dry_run = args.device_action != "check" and not getattr(args, "yes", False)
     save_report = getattr(args, "report", False) or (
-        args.command in ("setup", "migrate", "audit", "inventory", "init-phone", "import") and not dry_run
+        args.command in ("setup", "migrate", "audit", "inventory", "init-phone", "import", "resume", "reconcile")
+        and not dry_run
     )
     try:
         operations.check_application_paths(config, reports=save_report,
@@ -243,10 +255,16 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                         for item in outcome.results
                     ],
                 })
+        elif args.command == "resume" and not dry_run:
+            code, message, details = resume_import(config, args.operation_id, card=args.card, mount=args.mount)
+        elif args.command == "reconcile":
+            try:
+                details = reconcile_imports(config, args.audit)
+            except StateError as error:
+                code, message, details = 3, f"Uzgodnienie importu nie zostało zakończone. {error}", {}
+            else:
+                message = "Stan importu uzgodniony. Można wznowić import."
         else:
-            if args.command == "resume" and not dry_run:
-                raise StateError("Wznowienie transferu będzie dostępne po wdrożeniu operacji na plikach. "
-                                 "Użyj resume ID --dry-run.")
             details = operations.pending(config, getattr(args, "operation_id", None))
             message = "Plan wznowienia." if dry_run else "Podgląd niedokończonych operacji."
             if not details["Niedokończone operacje"]:

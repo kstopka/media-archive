@@ -24,6 +24,7 @@ Current coverage includes the package and CLI, configuration, SQLite lifecycle, 
 | [import-planning.md](import-planning.md) | Source manifests, profile decisions, reimport and staging preflight |
 | [camera-import.md](camera-import.md) | Import a registered camera card to staging and inspect the results |
 | [phone-import.md](phone-import.md) | Fill baseline gaps and import new content from a registered phone through ADB |
+| [import-recovery.md](import-recovery.md) | Resume a journaled import, reimport missing material and reconcile restored state |
 | [cli.md](cli.md) | Setup, migrations, planning, journal previews and report retention |
 | [snapshots.md](snapshots.md) | Manual state snapshots, validation and restore |
 | [development.md](development.md) | Environment, tests, change locations and documentation maintenance |
@@ -62,7 +63,7 @@ These documents use neutral examples and do not depend on private planning notes
 
 | Area | Current implementation |
 | --- | --- |
-| CLI | Help, configuration checks, setup, migration, journal previews and reports |
+| CLI | Help, configuration checks, setup, migration, journal previews, import recovery and reports |
 | Configuration | Literal `.env` parsing, immutable models, references, collection trees and lexical storage validation |
 | Collections and policies | Configuration and pure lookup methods; no scanning or file mutations |
 | Sources/storage | Linux volume checks and read-only local and ADB adapters |

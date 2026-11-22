@@ -132,7 +132,7 @@ def pending(config: Configuration, operation_id: int | None = None) -> dict[str,
             raise StateError("Podgląd operacji wymaga jawnej migracji bazy.")
         operations = load_unfinished(connection) if operation_id is None else (load_operation(connection, operation_id),)
         reconciliation_required = load_reconciliation(connection) is not None
-        reconcile_first = "Przed wznowieniem uzgodnij przywrócony stan z nośnikami."
+        reconcile_first = "Przed wznowieniem uzgodnij przywrócony stan z nośnikami przez reconcile."
         result = []
         for operation in operations:
             attempts = load_attempts(connection, operation.id)

@@ -94,7 +94,7 @@ def _copy_source(part: Part, source: LocalSource | AdbSource, path: Path, expect
 def execute_transfer(config: Configuration, operation_id: int, *, open_source: SourceOpener,
                      record_result: ResultWriter, progress: Callable[[int, int], None] | None = None,
                      cancelled: Callable[[], bool] | None = None,
-                     locks: OperationLocks | None = None) -> TransferResult:
+                     locks: OperationLocks | None = None, source_occurrence_id: int | None = None) -> TransferResult:
     """Acquire the planned locks, publish without overwriting, and commit the verified result."""
     database = config.app.database_file
     check_application_paths(config)
@@ -115,6 +115,10 @@ def execute_transfer(config: Configuration, operation_id: int, *, open_source: S
                 return TransferResult(attempts[-1].id, attempts[-1].verification_id)
             with connection.begin():
                 key, path = _destination(connection, config, target, resources)
+                if source_occurrence_id is not None:
+                    origin = history.load_occurrence(connection, source_occurrence_id)
+                    if origin.kind != "source" or origin.content_id != target.content_id:
+                        raise StateError("Źródło próby nie odpowiada treści zaplanowanego celu.")
             expected = SourceDigest(content.sha256, content.size)
             recovery = journal.recommended_recovery(attempts[-1] if attempts else None)
             with transaction(connection):
@@ -154,7 +158,14 @@ def execute_transfer(config: Configuration, operation_id: int, *, open_source: S
                                 journal.restart_after_missing_destination(connection, locks, attempt, absent)
                             at_risk = False
                     if proof is None:
-                        destination.ensure_absent()
+                        if target.kind == "staging":
+                            available, unit = destination.space()
+                            parents = destination.preflight()
+                            blocks = (expected.size + unit - 1) // unit + len(parents) + 1
+                            if available < blocks * unit + config.app.min_free_bytes:
+                                raise StateError("Za mało wolnego miejsca na kopię i wymaganą rezerwę stagingu.")
+                        else:
+                            destination.ensure_absent()
                         if cancelled is not None and cancelled():
                             raise ReadCancelled("Anulowano transfer.")
                         advance("transferring")
@@ -162,7 +173,13 @@ def execute_transfer(config: Configuration, operation_id: int, *, open_source: S
                               destination.parent(create=True) as parent,
                               Part.create(parent, f".media-archive-transfer-{run_id}", volume.mount_id) as part):
                             _copy_source(part, source, source_path, expected, progress, cancelled)
-                            advance("transferred")
+                            with transaction(connection):
+                                if source_occurrence_id is not None:
+                                    history.record_observation(
+                                        connection, source_occurrence_id, run_id, observed_at=datetime.now(timezone.utc),
+                                        present=True, size=expected.size,
+                                    )
+                                journal.advance_attempt(connection, locks, attempt, "transferred")
                             advance("verifying")
                             copy, status = part.verified_copy()
                             if cancelled is not None and cancelled():
