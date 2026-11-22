@@ -60,6 +60,7 @@ Paths below are relative to the repository root.
 | [import_recovery.py](../src/media_archive/import_recovery.py), [import_restore.py](../src/media_archive/import_restore.py) | Resume a saved import or reconcile staging and archive evidence after restore |
 | [metadata.py](../src/media_archive/metadata.py), [sort_planning.py](../src/media_archive/sort_planning.py) | Read embedded capture dates through ExifTool and preview a verified import's SORT destination |
 | [sort_execution.py](../src/media_archive/sort_execution.py), [sort_conflicts.py](../src/media_archive/sort_conflicts.py) | Journal executable SORT moves, preserve name conflicts and resume cleanup |
+| [backup_planning.py](../src/media_archive/backup_planning.py) | Select archive targets and preview BACKUP scopes and policies |
 | [catalog.py](../src/media_archive/catalog.py) | Search saved locations and record explicit catalog decisions |
 | [state/database.py](../src/media_archive/state/database.py) | Explicit creation/opening, connection lifetime, short transactions and migration entry point |
 | [state/migrations.py](../src/media_archive/state/migrations.py) | Application identity, Alembic revision validation and migration entry point |

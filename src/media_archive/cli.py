@@ -8,6 +8,7 @@ import sys
 
 from media_archive import operations
 from media_archive.audit import quick_audit
+from media_archive.backup_planning import plan_backup
 from media_archive.camera_import import import_camera
 from media_archive.catalog import keep_both, list_conflicts, record_manual_move, search_catalog
 from media_archive.config import ConfigError, load_config
@@ -135,8 +136,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="media-archive",
         description="Lokalne narzędzie do importu, porządkowania i archiwizacji mediów.",
-        epilog="Dostępny jest AUDIT, pierwszy spis, import i SORT. Operacje BACKUP "
-               "nie są jeszcze zaimplementowane.",
+        epilog="Dostępny jest AUDIT, pierwszy spis, import, SORT i podgląd zakresu BACKUP.",
     )
     parser.add_argument("--config", metavar="PLIK", help="plik konfiguracji (domyślnie .env)")
     parser.add_argument("--check-config", action="store_true", help="sprawdź sam plik konfiguracji")
@@ -187,6 +187,12 @@ def _parser() -> argparse.ArgumentParser:
     move = commands.add_parser("catalog-move", help="uzgodnij wykonaną ręcznie zmianę lokalizacji")
     move.add_argument("occurrence_id", type=_operation_id, metavar="ID_LOKALIZACJI")
     move.add_argument("target", type=Path, metavar="NOWA_ŚCIEŻKA")
+    backup = commands.add_parser("backup", help="pokaż profil, zakres i polityki BACKUP")
+    backup.add_argument("--dry-run", action="store_true", required=True, help="tylko odczyt i podgląd zakresu")
+    backup.add_argument("--profile", metavar="PROFIL")
+    backup.add_argument("--targets", nargs="+", metavar="CEL")
+    backup.add_argument("--collection", metavar="ZBIÓR")
+    backup.add_argument("--month", metavar="RRRR-MM")
     device = commands.add_parser("device", help="sprawdź lub jawnie zarejestruj wolumin")
     actions = device.add_subparsers(dest="device_action", required=True)
     for action, help_text in (
@@ -359,6 +365,11 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             current = record_manual_move(config, args.occurrence_id, args.target)
             details = {"Poprzednie ID lokalizacji": args.occurrence_id, "Nowe ID lokalizacji": current}
             message = "Zapisano zweryfikowaną zmianę lokalizacji."
+        elif args.command == "backup":
+            outcome = plan_backup(config, profile_id=args.profile, collection_id=args.collection,
+                                  month=args.month, targets=tuple(args.targets or ()),
+                                  announce=lambda message: print(message, file=sys.stderr, flush=True))
+            code, message, details = outcome.code, outcome.message, outcome.details
         elif args.command == "reconcile":
             try:
                 details = reconcile_imports(config, args.audit)

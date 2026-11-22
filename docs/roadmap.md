@@ -2,7 +2,7 @@
 
 This public roadmap tracks project milestones. Checkboxes mark completed milestones. For currently available behavior, see the [technical documentation](README.md).
 
-The CLI, configuration loader, SQLite lifecycle, persistent registration and [history APIs](history.md) are available. The CLI supports camera card import; phone import, sorting, backup and the configuration wizard remain planned. See the [SQLite state reference](state.md).
+The CLI, configuration loader, SQLite lifecycle, persistent registration and [history APIs](history.md) are available. The CLI supports camera and phone import, SORT, catalog search and read-only BACKUP scope preview. Backup transfers and the configuration wizard remain planned. See the [SQLite state reference](state.md).
 
 Design references: [archive workflows and state](design/archive-workflows.md) and [future configurator](design/configurator.md). Future module boundaries, database details and command syntax must be finalized during the relevant implementation task.
 
@@ -64,7 +64,7 @@ After acceptance, inventory/audit can be used without waiting for IMPORT/SORT/BA
 
 Target planning must persist each material occurrence's required pair. An explicit switch assigns new material to the new pair while earlier material and pending second copies retain their original assignments. See [successive archive pairs](design/archive-workflows.md#successive-archive-pairs). Manual-space-release guidance uses each path's effective deletion policy, including child overrides. Retention paths are eligible after fresh verification. Paths that propagate approved deletions require a separate warning about subsequent archive cleanup.
 
-- [ ] **6.1 Scope and policies.** Manually enter backup, identify/select connected targets and propose a matching profile. Profile All includes assigned roots; collection All includes its complete tree. Month scopes combine configured dated roots and appear only for work pending on selected connected targets. Plain collections have no month submenu.
+- [x] **6.1 Scope and policies.** Use the [scope preview](backup-planning.md) to identify/select connected targets and propose a matching profile. Profile All includes assigned roots; collection All includes its complete tree. Month scopes combine configured dated roots and appear only for work pending on selected connected targets. Plain collections have no month submenu.
 - [ ] **6.2 Targets and capacity.** Validate independent disks and preflight the entire selected batch, including temporary files, replacements, snapshots and at least 1 GiB reserve. Insufficient space on any selected available target blocks the whole batch before transfer or cleanup.
 - [ ] **6.3 Append policies.** Verify each required path/target independently. Skip current verified copies, preserve conflicting contents and intentional copies under different paths; never move historical archive copies automatically.
 - [ ] **6.4 Controlled replacement.** Apply only where policy explicitly permits replacement, publishing after verification. Preserve the previous valid copy on failure; changed content requires new evidence.

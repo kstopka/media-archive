@@ -75,6 +75,16 @@ class Report:
                             lines.append(f"  Przeniesiono do {item['przeniesiono_do']}")
                         if item["id_lokalizacji"] is not None:
                             lines.append(f"  ID lokalizacji · {item['id_lokalizacji']}")
+            elif key == "Cele BACKUP":
+                lines.extend(f"- {item['grupa']}/{item['cel']} · {item['stan']}"
+                             + (f" · {item['uwaga']}" if "uwaga" in item else "") for item in value)
+            elif key == "Zakresy BACKUP":
+                lines.append(key)
+                lines.extend(f"- {item['zbiór']} · {item['label']}"
+                             + (" · dostępny wybór miesiąca" if item.get("miesiące") else "") for item in value)
+            elif key == "Błędy planowania":
+                lines.extend(f"- {item['ścieżka']} · {item['błąd']}"
+                             + (f" · cel {item['cel']}" if "cel" in item else "") for item in value)
             elif key == "Plan SORT":
                 for item in value:
                     line = f"- Import {item['id_importu']} · {item['plik']} · {item['stan']}"

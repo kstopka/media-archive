@@ -56,6 +56,7 @@ Setup creates `state.sqlite3` in `APP_STATE_DIR`. The [CLI reference](docs/cli.m
 - [Roadmap and planned designs](docs/README.md#roadmap-and-planned-designs) — implementation stages and future workflows.
 - [Import recovery](docs/import-recovery.md) — resume an interrupted import, reimport missing staging material or reconcile after restore.
 - [SORT](docs/sort.md) — preview, place and recover verified media imports.
+- [BACKUP preview](docs/backup-planning.md) — select a profile and check its scope and policies.
 - [Catalog](docs/catalog.md) — find saved locations, review conflicts and verify manual moves.
 - [Configuration](docs/configuration.md) — settings, models, validation and compatibility.
 - [Architecture](docs/architecture.md) — modules and execution flow.

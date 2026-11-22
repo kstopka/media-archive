@@ -27,6 +27,7 @@ Current coverage includes the package and CLI, configuration, SQLite lifecycle, 
 | [import-recovery.md](import-recovery.md) | Resume a journaled import, reimport missing material and reconcile restored state |
 | [sort-planning.md](sort-planning.md) | Read capture dates, preview SORT paths and record a manual date |
 | [sort.md](sort.md) | Publish verified placements, preserve conflicts and recover interrupted moves |
+| [backup-planning.md](backup-planning.md) | Select a BACKUP profile, targets, scope and policies |
 | [catalog.md](catalog.md) | Search saved locations, reconcile manual moves and review durable conflicts |
 | [cli.md](cli.md) | Setup, migrations, planning, journal previews and report retention |
 | [snapshots.md](snapshots.md) | Manual state snapshots, validation and restore |
@@ -85,8 +86,7 @@ These documents use neutral examples and do not depend on private planning notes
 | Phone import | Verified ADB import to staging, including completion of pending baseline processing |
 | SORT | Read-only preview, verified placement and cleanup, explicit date decisions and durable name conflicts |
 | Catalog | Search saved media locations, verify manual moves and review name conflicts |
-| BACKUP | Planned |
-| Backup menu/month availability | Not implemented; configuration records intended scope and filtering mode |
+| BACKUP | Read-only [scope and policy preview](backup-planning.md). Transfer, capacity planning and snapshots are planned. |
 | Configuration wizard | Future enhancement; settings are currently edited in `.env` |
 
 The expected future pipeline is source → staging → SORT → local collection → manually invoked BACKUP. This explains existing configuration relationships; it is not an executable workflow yet. Future behavior must be marked as such throughout these documents.

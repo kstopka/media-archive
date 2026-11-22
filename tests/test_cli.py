@@ -61,7 +61,7 @@ class CliTests(unittest.TestCase):
                 self.assertIn("media-archive", result.stdout)
                 self.assertIn("--help", result.stdout)
                 self.assertIn(
-                    "nie są jeszcze zaimplementowane", " ".join(result.stdout.split())
+                    "podgląd zakresu BACKUP", " ".join(result.stdout.split())
                 )
                 self.assertEqual(result.stderr, "")
 
