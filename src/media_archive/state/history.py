@@ -346,7 +346,8 @@ def load_staged_imports(connection: Connection, source_id: int | None = None) ->
     staging = history.occurrences.alias("import_staging")
     query = (
         select(history.imports.c.id, source.c.source_id, source.c.content_id, staging.c.id.label("occurrence_id"),
-               staging.c.path, staging.c.volume_id, history.contents.c.sha256, history.contents.c.size,
+               staging.c.path, staging.c.volume_id, source.c.path.label("source_path"),
+               history.contents.c.sha256, history.contents.c.size,
                history.placements.c.import_id.label("placement_id"))
         .select_from(history.imports)
         .join(source, source.c.id == history.imports.c.source_occurrence_id)

@@ -59,6 +59,16 @@ class Report:
                 if not summary_only and value:
                     lines.append(key)
                     lines.extend(f"- {item['ścieżka']} · {item['decyzja']}" for item in value)
+            elif key == "Plan SORT":
+                for item in value:
+                    line = f"- Import {item['id_importu']} · {item['plik']} · {item['stan']}"
+                    if item["cel"]:
+                        line += f" → {item['cel']}"
+                    if item["błąd"]:
+                        line += f" · {item['błąd']}"
+                    if item.get("metadane", {}).get("diagnostyka"):
+                        line += " · " + " · ".join(item["metadane"]["diagnostyka"])
+                    lines.append(line)
             elif key == "Wyniki importu":
                 for item in value:
                     if summary_only and item["stan"] == "zaimportowano":

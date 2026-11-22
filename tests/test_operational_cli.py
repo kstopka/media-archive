@@ -129,13 +129,13 @@ class OperationalCliTests(unittest.TestCase):
 
     def test_migration_plan_preserves_old_database_until_explicit_upgrade(self) -> None:
         revisions = self.root / "old-revisions"
-        shutil.copytree(migrations._SCRIPT_LOCATION, revisions, ignore=shutil.ignore_patterns("r0004*", "r0005*", "r0006*", "r0007*", "__pycache__"))
+        shutil.copytree(migrations._SCRIPT_LOCATION, revisions, ignore=shutil.ignore_patterns("r0004*", "r0005*", "r0006*", "r0007*", "r0008*", "__pycache__"))
         with patch.object(migrations, "_SCRIPT_LOCATION", revisions):
             self.run_command("setup", "--yes")
         before = self.database.read_bytes()
         plan = self.run_command("migrate", "--dry-run")
         self.assertIn("Rewizja bieżąca · 0003", plan)
-        self.assertIn("Rewizja docelowa · 0007", plan)
+        self.assertIn("Rewizja docelowa · 0008", plan)
         self.assertEqual(self.database.read_bytes(), before)
         invalid_reports = self.root / "report-file"
         invalid_reports.touch()
@@ -151,7 +151,7 @@ class OperationalCliTests(unittest.TestCase):
         linked.unlink()
         self.run_command("migrate")
         with open_database(self.database) as connection:
-            self.assertEqual(schema_version(connection), "0007")
+            self.assertEqual(schema_version(connection), "0008")
         validate_registered_configuration(load_config(self.settings))
 
     def test_report_failure_returns_partial_and_preserves_setup(self) -> None:

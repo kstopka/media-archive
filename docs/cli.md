@@ -26,6 +26,8 @@ Use `media-archive` or `python -m media_archive`. Put `--config FILE` before the
 | `resume ID --dry-run` | Show the next step for an unfinished operation using its numeric operation ID. |
 | `resume ID [--card CARD --mount DIRECTORY]` | Verify a possibly published copy or [resume an import](import-recovery.md) from the saved source. |
 | `reconcile [--audit AUDIT_ID]` | Check [restored import state](import-recovery.md#after-restoring-sqlite) and clear the restore marker when resolved. Repeat `--audit` for multiple archive groups. |
+| `sort --dry-run [--report]` | Read staged media and preview [SORT destinations](sort-planning.md), including files awaiting a valid date. |
+| `sort-date ID YYYY-MM-DD` | Set the intended calendar date for a pending import in SQLite. |
 
 All commands that need existing state report a missing database as an error. Setup and migration use the [SQLite lifecycle](state.md#first-setup-and-upgrades). The configuration wizard is a separate planned feature. Camera import uses the [journal](journal.md) and [history](history.md).
 
@@ -48,7 +50,7 @@ Rotation checks the Media Archive format marker and requires the invocation ID a
 | 0 | Success or completed preview |
 | 1 | Execution error |
 | 2 | Invalid arguments or configuration |
-| 3 | Partial or blocked result. An audit, inventory, phone initialization, import, resume or reconciliation remains incomplete, a published database or snapshot could not be confirmed durable, or a completed execution could not save its report. |
+| 3 | Partial or blocked result. An audit, inventory, phone initialization, import, resume, reconciliation or SORT preview has pending work, a published database or snapshot could not be confirmed durable, or a completed execution could not save its report. |
 | 4 | Audit completed and detected differences in paths, attributes or full-mode SHA-256. |
 | 130 | Interrupted by the operator |
 

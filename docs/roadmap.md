@@ -55,8 +55,8 @@ After acceptance, inventory/audit can be used without waiting for IMPORT/SORT/BA
 
 ## Stage 5 — SORT and catalog
 
-- [ ] **5.1 ExifTool metadata.** Photo capture dates, film container UTC conversion, raw fields and diagnostics. Test invalid/missing dates, day/month/year boundaries and daylight-saving transitions; never rewrite embedded metadata.
-- [ ] **5.2 Destination/date planning.** Configured year/month or day layouts, separate video segments and unresolved dates outside backup collections. Store manually supplied dates in state; do not guess from mtime, filename or import time.
+- [x] **5.1 ExifTool metadata.** Read photo capture dates and convert UTC movie-header timestamps without editing media. See [SORT metadata](sort-planning.md).
+- [x] **5.2 Destination/date planning.** Preview configured date layouts and unresolved paths, and record manual dates by import ID. See [SORT preview](sort-planning.md).
 - [ ] **5.3 SORT execution and conflicts.** Move verified staging files; across filesystems, copy/verify before deleting only the program-owned staging copy. Preserve distinct contents with hash suffixes and durable conflict groups. Handle NTFS/Unicode naming conflicts and repeated runs safely.
 - [ ] **5.4 Search and conflict review.** Search by name/month/source, show last-known offline locations and reconcile manual moves. Resolving a conflict as “keep both” must not delete either variant.
 

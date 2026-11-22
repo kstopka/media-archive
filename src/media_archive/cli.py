@@ -2,6 +2,7 @@
 
 import argparse
 from collections.abc import Sequence
+from datetime import date
 from pathlib import Path
 import sys
 
@@ -17,6 +18,7 @@ from media_archive.inventory import inventory
 from media_archive.phone_initialization import initialize_phone
 from media_archive.phone_import import import_phone
 from media_archive.reports import Report, write_report
+from media_archive.sort_planning import SortItem, plan_sort, set_sort_date
 from media_archive.state import DatabasePublishedError, DeviceKey, StateError
 from media_archive.state.snapshots import SnapshotPublishedError, create_snapshot, restore_snapshot, validate_snapshot
 
@@ -40,6 +42,16 @@ def _device_key(value: str) -> DeviceKey:
         case ["archive", group, alias] if group and alias:
             return DeviceKey("archive", alias, group)
     raise argparse.ArgumentTypeError("Użyj card:ALIAS, local:ALIAS albo archive:GRUPA:ALIAS.")
+
+
+def _sort_date(value: str) -> date:
+    try:
+        result = date.fromisoformat(value)
+        if result.isoformat() == value:
+            return result
+    except ValueError:
+        pass
+    raise argparse.ArgumentTypeError("Podaj poprawną datę w postaci RRRR-MM-DD.")
 
 
 _IMPORT_DECISIONS = {
@@ -76,11 +88,33 @@ def _import_details(plan: ImportPlan) -> dict[str, object]:
     return details
 
 
+def _sort_details(plan: tuple[SortItem, ...]) -> dict[str, object]:
+    rows = []
+    for item in plan:
+        metadata = item.metadata
+        row = {
+            "id_importu": item.import_id, "plik": item.name, "profil": item.profile,
+            "staging": str(item.staging), "cel": str(item.target) if item.target is not None else None,
+            "stan": {"ready": "gotowy", "undated": "do wyjaśnienia", "blocked": "zablokowany"}[item.state],
+            "ręczna_data": item.manual_date.isoformat() if item.manual_date else None, "błąd": item.problem,
+        }
+        if metadata is not None:
+            row["metadane"] = {
+                "pole": metadata.tag, "surowa_data": metadata.raw_date,
+                "odczytana_data": metadata.timestamp.isoformat() if metadata.timestamp else None,
+                "ExifTool": metadata.tool_version, "diagnostyka": metadata.diagnostics,
+            }
+        rows.append(row)
+    return {"Pliki gotowe do SORT": sum(item.state == "ready" for item in plan),
+            "Pliki do wyjaśnienia": sum(item.state == "undated" for item in plan),
+            "Zablokowane pliki": sum(item.state == "blocked" for item in plan), "Plan SORT": rows}
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="media-archive",
         description="Lokalne narzędzie do importu, porządkowania i archiwizacji mediów.",
-        epilog="Dostępny jest AUDIT, pierwszy spis i import z karty lub telefonu. SORT i BACKUP "
+        epilog="Dostępny jest AUDIT, pierwszy spis, import i podgląd SORT. Wykonanie SORT i BACKUP "
                "nie są jeszcze zaimplementowane.",
     )
     parser.add_argument("--config", metavar="PLIK", help="plik konfiguracji (domyślnie .env)")
@@ -119,6 +153,10 @@ def _parser() -> argparse.ArgumentParser:
     import_parser.add_argument("--mount", type=Path, metavar="KATALOG")
     import_parser.add_argument("--reimport", action="append", default=[], metavar="ŚCIEŻKA",
                                help="zaplanuj ponowny import wskazanego pliku względnie do katalogu źródła")
+    sort = commands.add_parser("sort", help="pokaż podgląd sortowania zweryfikowanych importów")
+    sort_date = commands.add_parser("sort-date", help="zapisz ręczną datę importu oczekującego na SORT")
+    sort_date.add_argument("import_id", type=_operation_id, metavar="ID_IMPORTU")
+    sort_date.add_argument("date", type=_sort_date, metavar="RRRR-MM-DD")
     device = commands.add_parser("device", help="sprawdź lub jawnie zarejestruj wolumin")
     actions = device.add_subparsers(dest="device_action", required=True)
     for action, help_text in (
@@ -130,7 +168,7 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--to", type=Path, metavar="KATALOG", required=action in ("replace", "reformat"))
         if action != "check":
             command.add_argument("--yes", action="store_true", help="zapisz sprawdzoną zmianę w rejestrze")
-    for command in (setup, migrate, resume, audit, import_parser):
+    for command in (setup, migrate, resume, audit, import_parser, sort):
         command.add_argument("--dry-run", action="store_true", help="pokaż plan bez zapisu stanu")
         command.add_argument("--report", action="store_true", help="zapisz raport tekstowy i JSON")
     return parser
@@ -146,6 +184,8 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         parser.error("Użyj setup --dry-run, aby zobaczyć plan, albo setup --yes, aby go wykonać.")
     if args.command == "restore" and (args.config is None or not args.yes):
         parser.error("Użyj --config PLIK restore GENERACJA --yes.")
+    if args.command == "sort" and not args.dry_run:
+        parser.error("Użyj sort --dry-run, aby wyświetlić podgląd sortowania.")
     if args.command in ("import", "resume") and (args.card is None) != (args.mount is None):
         parser.error("Import z karty wymaga jednocześnie --card i --mount.")
     if args.command == "audit":
@@ -257,6 +297,15 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                 })
         elif args.command == "resume" and not dry_run:
             code, message, details = resume_import(config, args.operation_id, card=args.card, mount=args.mount)
+        elif args.command == "sort":
+            plan = plan_sort(config)
+            details = _sort_details(plan)
+            code = 3 if any(item.state != "ready" for item in plan) else 0
+            message = "Podgląd SORT wymaga uwagi." if code else "Podgląd SORT gotowy."
+        elif args.command == "sort-date":
+            set_sort_date(config, args.import_id, args.date)
+            details = {"ID importu": args.import_id, "Ręczna data": args.date.isoformat()}
+            message = "Zapisano ręczną datę. Użyj sort --dry-run, aby odświeżyć podgląd."
         elif args.command == "reconcile":
             try:
                 details = reconcile_imports(config, args.audit)
