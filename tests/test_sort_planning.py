@@ -2,6 +2,7 @@
 
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import date, datetime, timezone
+import errno
 from hashlib import sha256
 from io import StringIO
 import json
@@ -17,12 +18,17 @@ from zoneinfo import ZoneInfo
 import zlib
 
 from media_archive.cli import main
+from media_archive._transfer_files import Destination, Part
 from media_archive.config import load_config
 from media_archive.devices import registered_volume
 from media_archive.metadata import MetadataToolError, read_metadata
+from media_archive.import_restore import reconcile_imports
+from media_archive.sort_execution import execute_sort, resume_sort
 from media_archive.sort_planning import plan_sort, set_sort_date
-from media_archive.state import DeviceKey, StateError, history, open_database, transaction
+from media_archive.state import DeviceKey, StateError, history, open_database, sort_moves, transaction
 from media_archive.state.registry import initialize_database
+from media_archive.state.reconciliation import load_reconciliation
+from media_archive.state.snapshots import create_snapshot, restore_snapshot
 from tests.config_fixtures import registry_values, write_config
 from tests.test_import_planning import mounted
 
@@ -55,8 +61,9 @@ class SortPlanningTests(unittest.TestCase):
         initialize_database(self.config)
         self.volume = self.config.local.volumes[0]
         self.volume.root.mkdir(parents=True)
-        self.enterContext(patch("media_archive.sort_planning.verify_volume",
-                                side_effect=lambda *_: mounted(self.volume.root)))
+        for module in ("sort_planning", "sort_execution", "transfer", "import_restore"):
+            self.enterContext(patch(f"media_archive.{module}.verify_volume",
+                                    side_effect=lambda *_, **__: mounted(self.volume.root)))
 
     def _import(self, path: Path, data: bytes, *, phone: bool = True) -> tuple[int, Path]:
         key = DeviceKey("phone", "main") if phone else DeviceKey("card", "a")
@@ -194,3 +201,153 @@ class SortPlanningTests(unittest.TestCase):
             with path.open("rb") as stream:
                 metadata = read_metadata(stream, path, zone)
             self.assertEqual(metadata.timestamp.isoformat(), f"2025-10-26T02:30:00{offset}")
+
+    @unittest.skipUnless(shutil.which("exiftool"), "requires ExifTool")
+    def test_sort_moves_undated_import_and_places_it_after_a_manual_date(self) -> None:
+        import_id, staging = self._import(Path("/camera/photo.png"), _photo())
+        inode = staging.stat().st_ino
+        first, = execute_sort(self.config)
+        self.assertEqual(first.status, "undated")
+        undated = first.item.target
+        self.assertEqual(undated.read_bytes(), _photo())
+        self.assertEqual(undated.stat().st_ino, inode)
+        self.assertFalse(staging.exists())
+        repeated, = execute_sort(self.config)
+        self.assertIsNone(repeated.item.operation_id)
+        set_sort_date(self.config, import_id, date(2025, 2, 1))
+        final, = execute_sort(self.config)
+        self.assertEqual(final.status, "placed")
+        self.assertFalse(undated.exists())
+        self.assertEqual(final.item.target.read_bytes(), _photo())
+        self.assertEqual(execute_sort(self.config), ())
+        new_import, staging = self._import(Path("/camera/photo.png"), _photo())
+        set_sort_date(self.config, new_import, date(2025, 2, 1))
+        with patch.object(Part, "create", side_effect=AssertionError("identical destination should be reused")):
+            repeated, = execute_sort(self.config)
+        self.assertEqual(repeated.status, "placed")
+        self.assertEqual(repeated.item.target, final.item.target)
+        self.assertFalse(staging.exists())
+        with open_database(self.database) as connection:
+            self.assertIsNotNone(history.load_placement(connection, import_id))
+            self.assertIsNotNone(history.load_placement(connection, new_import))
+            self.assertTrue(all(move.cleanup_done for move in sort_moves.load_moves(connection)))
+
+    @unittest.skipUnless(shutil.which("exiftool") and shutil.which("rsync"), "requires ExifTool and rsync")
+    def test_sort_keeps_unicode_name_conflicts_and_extends_a_hash_suffix(self) -> None:
+        sample = _movie(datetime(2025, 2, 5, tzinfo=timezone.utc))
+        _, staging = self._import(Path("/camera/Łódź.mp4"), sample)
+        plan, = plan_sort(self.config)
+        base = plan.target
+        base.parent.mkdir(parents=True)
+        occupied = base.with_name("ŁÓDŹ.MP4")
+        occupied.write_bytes(b"first existing variant")
+        prefix = sha256(sample).hexdigest()
+        short = base.with_name(f"{base.stem}-{prefix[:8]}{base.suffix}")
+        short.write_bytes(b"second existing variant")
+        with patch("media_archive._transfer_files.os.link", side_effect=OSError(errno.EOPNOTSUPP, "unsupported")):
+            self._cli("sort")
+        written = base.with_name(f"{base.stem}-{prefix[:12]}{base.suffix}")
+        self.assertEqual(written.read_bytes(), sample)
+        self.assertEqual(occupied.read_bytes(), b"first existing variant")
+        self.assertEqual(short.read_bytes(), b"second existing variant")
+        self.assertFalse(staging.exists())
+        with open_database(self.database) as connection:
+            self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM sort_conflicts").scalar_one(), 1)
+            self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM sort_conflict_members").scalar_one(), 3)
+
+    @unittest.skipUnless(shutil.which("exiftool"), "requires ExifTool")
+    def test_resume_rechecks_publication_and_preserves_working_copy_when_target_changes(self) -> None:
+        sample = _movie(datetime(2025, 2, 5, tzinfo=timezone.utc))
+        import_id, staging = self._import(Path("/camera/movie.mp4"), sample)
+        publish = Destination.publish_link
+
+        def after_publication(destination, *args):
+            publish(destination, *args)
+            raise KeyboardInterrupt
+
+        with patch.object(Destination, "publish_link", after_publication):
+            interrupted, = execute_sort(self.config)
+        self.assertEqual(interrupted.status, "interrupted")
+        self.assertTrue(staging.exists())
+        operation = interrupted.item.operation_id
+        target = interrupted.item.target
+        self.assertEqual(target.read_bytes(), sample)
+        with open_database(self.database) as connection:
+            self.assertIsNone(history.load_placement(connection, import_id))
+        with self.assertRaisesRegex(StateError, f"resume {operation}"):
+            set_sort_date(self.config, import_id, date(2025, 2, 6))
+        with patch("media_archive.sort_execution._cleanup", side_effect=KeyboardInterrupt):
+            self.assertEqual(resume_sort(self.config, operation).status, "interrupted")
+        self.assertIn("oczekuje na usunięcie", self._cli("pending"))
+        saved = self.root / "published"
+        target.rename(saved)
+        target.write_bytes(b"unrelated")
+        self.assertEqual(resume_sort(self.config, operation).status, "blocked")
+        self.assertEqual(staging.read_bytes(), sample)
+        self.assertEqual(target.read_bytes(), b"unrelated")
+        saved.replace(target)
+        self._cli("resume", str(operation))
+        self.assertFalse(staging.exists())
+        self.assertEqual(target.read_bytes(), sample)
+        self.assertEqual(target.stat().st_nlink, 1)
+        self.assertEqual(list(target.parent.glob(".media-archive-transfer-*")), [])
+
+    @unittest.skipUnless(shutil.which("exiftool"), "requires ExifTool")
+    def test_restore_reconciles_a_sort_published_after_the_snapshot(self) -> None:
+        import_id, staging = self._import(Path("/camera/movie.mp4"),
+                                         _movie(datetime(2025, 2, 5, tzinfo=timezone.utc)))
+        with patch.object(Destination, "publish_link", side_effect=KeyboardInterrupt):
+            interrupted, = execute_sort(self.config)
+        operation = interrupted.item.operation_id
+        generations = self.root / "generations"
+        generations.mkdir()
+        snapshot = create_snapshot(self.config, generations)
+        self.assertEqual(resume_sort(self.config, operation).status, "placed")
+        self.assertFalse(staging.exists())
+        restore_snapshot(self.config, snapshot)
+        self.assertEqual(reconcile_imports(self.config)["Sprawdzone operacje SORT"], 1)
+        with open_database(self.database) as connection:
+            self.assertIsNone(load_reconciliation(connection))
+            self.assertIsNotNone(history.load_placement(connection, import_id))
+        self.assertEqual(resume_sort(self.config, operation).status, "placed")
+
+    @unittest.skipUnless(shutil.which("exiftool"), "requires ExifTool")
+    def test_sort_resume_blocks_new_alias_and_leaves_no_linked_part_before_publication(self) -> None:
+        sample = _movie(datetime(2025, 2, 5, tzinfo=timezone.utc))
+        _, staging = self._import(Path("/camera/movie.mp4"), sample)
+        with patch("media_archive._transfer_files.os.link", side_effect=KeyboardInterrupt):
+            interrupted, = execute_sort(self.config)
+        self.assertEqual(interrupted.status, "interrupted")
+        target = interrupted.item.target
+        self.assertFalse(target.exists())
+        self.assertEqual(staging.stat().st_nlink, 1)
+        self.assertEqual(list(target.parent.glob(".media-archive-transfer-*")), [])
+        other = target.with_name("MOVIE.MP4")
+        other.write_bytes(b"external file")
+        blocked = resume_sort(self.config, interrupted.item.operation_id)
+        self.assertEqual(blocked.status, "blocked")
+        self.assertIn("pisownią", blocked.item.problem)
+        self.assertFalse(target.exists())
+        self.assertEqual(other.read_bytes(), b"external file")
+        self.assertEqual(staging.read_bytes(), sample)
+        other.rename(self.root / "external")
+        resumed = resume_sort(self.config, interrupted.item.operation_id)
+        self.assertEqual(resumed.status, "placed")
+        self.assertFalse(staging.exists())
+        self.assertEqual(target.stat().st_nlink, 1)
+
+    @unittest.skipUnless(shutil.which("exiftool"), "requires ExifTool")
+    def test_restore_reports_unknown_undated_copy_and_keeps_block(self) -> None:
+        _, staging = self._import(Path("/camera/photo.png"), _photo())
+        generations = self.root / "generations"
+        generations.mkdir()
+        snapshot = create_snapshot(self.config, generations)
+        moved, = execute_sort(self.config)
+        self.assertEqual(moved.status, "undated")
+        self.assertFalse(staging.exists())
+        restore_snapshot(self.config, snapshot)
+        with self.assertRaisesRegex(StateError, "Do wyjaśnienia zawiera nierozpoznany wpis"):
+            reconcile_imports(self.config)
+        with open_database(self.database) as connection:
+            self.assertIsNotNone(load_reconciliation(connection))
+        self.assertEqual(moved.item.target.read_bytes(), _photo())

@@ -18,6 +18,7 @@ from ._history_queries import find, insert_id, require_row, require_write_transa
 from .errors import StateError
 from .locking import OperationLocks, Resource, canonical_path, collection_resource, require_locks
 from .reconciliation import require_reconciled
+from .sort_moves import moves as sort_moves
 from .registry import _validate_registered_configuration
 
 operations = table("journal_operations", column("id"), column("operation_key"), column("intent"),
@@ -105,7 +106,7 @@ def plan_operation(
     _require_locks(connection, locks, requested)
     _require_configuration(connection, config)
     target = require_row(connection, history.occurrences, id=target_occurrence_id)
-    if target.kind not in ("staging", "local", "archive") or target.content_id is None:
+    if target.kind not in ("staging", "local", "archive", "undated") or target.content_id is None:
         raise StateError("Cel operacji wymaga znanej treści i wystąpienia docelowego.")
     if target.kind == "archive":
         device = require_row(connection, registry.devices, id=target.device_id)
@@ -113,6 +114,7 @@ def plan_operation(
         if Resource("archive", slot.group_id) not in requested:
             raise StateError("Cel kopii wymaga blokady swojej grupy archiwalnej.")
     collection_roots = {str(canonical_path(item.local_root)) for item in config.collections if item.parent_id is None}
+    collection_roots.update(str(canonical_path(path)) for path in (config.local.staging_root, config.local.undated_root))
     for resource in requested:
         if resource.kind == "collection":
             if resource.id not in collection_roots:
@@ -125,6 +127,11 @@ def plan_operation(
         root = _collection_lock(config, target.collection_id)
         if root not in requested or not canonical_path(Path(target.path)).is_relative_to(Path(root.id)):
             raise StateError("Cel lokalny wymaga blokady swojego głównego zbioru.")
+    if target.kind == "undated":
+        root = canonical_path(config.local.undated_root)
+        path = canonical_path(Path(target.path))
+        if Resource("collection", str(root)) not in requested or path == root or not path.is_relative_to(root):
+            raise StateError("Cel Do wyjaśnienia wymaga blokady swojego katalogu.")
 
     existing = find(connection, operations, operation_key=operation_key)
     if existing is not None:
@@ -166,6 +173,7 @@ def _collection_lock(config: Configuration, collection_id: str) -> Resource:
 def start_attempt(
     connection: Connection, locks: OperationLocks, operation_id: int, run_id: str, *,
     recovery: Literal["restart", "reconcile"] | None = None,
+    check_destination: bool = False,
 ) -> int:
     """Start work or explicitly take over an unfinished attempt under the same locks."""
     require_write_transaction(connection)
@@ -196,9 +204,10 @@ def start_attempt(
     with connection.begin_nested():
         if recovery is not None and previous.state in _ACTIVE:
             _set_state(connection, previous, "interrupted")
-        state = "verifying" if recovery == "reconcile" else "planned"
+        reconciling = recovery == "reconcile" or check_destination
+        state = "verifying" if reconciling else "planned"
         attempt_id = insert_id(connection, attempts, operation_id=operation_id, run_id=run_id, owner_token=owner,
-                               state=state, reconciling=(recovery == "reconcile"),
+                               state=state, reconciling=reconciling,
                                verification_floor=connection.scalar(select(func.max(history.verifications.c.id))) or 0,
                                observation_floor=connection.scalar(select(func.max(history.observations.c.id))) or 0)
         _event(connection, attempt_id, state)
@@ -284,7 +293,8 @@ def commit_result(
         record_result(connection, attempt.verification_id)
         operation = require_row(connection, operations, id=attempt.operation_id)
         target = require_row(connection, history.occurrences, id=operation.target_occurrence_id)
-        results = {"staging": history.imports, "local": history.placements, "archive": history.copies}
+        results = {"staging": history.imports, "local": history.placements, "archive": history.copies,
+                   "undated": sort_moves}
         if connection.execute(results[target.kind].select().filter_by(
             verification_id=attempt.verification_id,
         ).limit(1)).first() is None:

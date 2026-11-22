@@ -24,9 +24,10 @@ Use `media-archive` or `python -m media_archive`. Put `--config FILE` before the
 | `import --source PROFILE [--reimport RELATIVE_PATH]` | Execute [phone import through ADB](phone-import.md) with a text and JSON report. |
 | `pending` | List unfinished journal operations and their latest attempt states. A listed operation may still have a live owner. |
 | `resume ID --dry-run` | Show the next step for an unfinished operation using its numeric operation ID. |
-| `resume ID [--card CARD --mount DIRECTORY]` | Verify a possibly published copy or [resume an import](import-recovery.md) from the saved source. |
-| `reconcile [--audit AUDIT_ID]` | Check [restored import state](import-recovery.md#after-restoring-sqlite) and clear the restore marker when resolved. Repeat `--audit` for multiple archive groups. |
+| `resume ID [--card CARD --mount DIRECTORY]` | Resume a saved [IMPORT](import-recovery.md) or [SORT](sort.md) operation, including cleanup. The card arguments apply only to camera import. |
+| `reconcile [--audit AUDIT_ID]` | Check [restored IMPORT and SORT state](import-recovery.md#after-restoring-sqlite) and clear the restore marker when resolved. Repeat `--audit` for multiple archive groups. |
 | `sort --dry-run [--report]` | Read staged media and preview [SORT destinations](sort-planning.md), including files awaiting a valid date. |
+| `sort` | [Place verified imports](sort.md) in their collections or the unresolved directory and save a text and JSON report. |
 | `sort-date ID YYYY-MM-DD` | Set the intended calendar date for a pending import in SQLite. |
 
 All commands that need existing state report a missing database as an error. Setup and migration use the [SQLite lifecycle](state.md#first-setup-and-upgrades). The configuration wizard is a separate planned feature. Camera import uses the [journal](journal.md) and [history](history.md).
@@ -37,7 +38,7 @@ The recovery preview distinguishes a new attempt from an explicit takeover of an
 
 ## Reports and exit status
 
-Setup, migration, audit, inventory, phone initialization, import, resume and reconciliation executions save one UTF-8 text/JSON pair per finished invocation after loading a valid configuration and checking output locations. Planning displays its result in the terminal. Add `--report` to a dry run to save the pair. A dry run makes no state, registration or media changes. If its report directory is under the state directory, producing that report may also create the parent directories.
+Setup, migration, audit, inventory, phone initialization, import, SORT, resume and reconciliation executions save one UTF-8 text/JSON pair per finished invocation after loading a valid configuration and checking output locations. Planning displays its result in the terminal. Add `--report` to a dry run to save the pair. A dry run makes no state, registration or media changes. If its report directory is under the state directory, producing that report may also create the parent directories.
 
 State and report paths are checked against resolved collection roots, including collections reached through symbolic links. When a report is requested, the CLI rejects an existing non-directory or symbolic link at `APP_REPORTS_DIR` before setup or migration writes state.
 

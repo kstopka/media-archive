@@ -1,6 +1,7 @@
 """Plan the destination of verified imports and accept explicit calendar dates."""
 
 from dataclasses import dataclass, replace
+from contextlib import ExitStack
 from datetime import date
 from hashlib import file_digest
 from pathlib import Path
@@ -10,12 +11,13 @@ from sqlalchemy.engine import Connection, RowMapping
 
 from media_archive._transfer_files import Destination
 from media_archive.config import Configuration
-from media_archive.devices import MountedVolume, registered_volume, staging_volume, verify_volume
+from media_archive.devices import MountedVolume, registered_volume, verify_volume
 from media_archive.metadata import MediaMetadata, MetadataToolError, read_metadata
 from media_archive.operations import check_application_paths
 from media_archive.sources import LocalSource
 from media_archive.state import (
-    DeviceKey, StateError, history, open_database, schema_version, transaction, validate_registered_configuration,
+    DeviceKey, StateError, history, open_database, schema_version, sort_moves, transaction,
+    validate_registered_configuration,
 )
 from media_archive.state.locking import Resource, canonical_path, installation_lock, lock_resources
 from media_archive.state.migrations import _head_revision
@@ -34,6 +36,9 @@ class SortItem:
     metadata: MediaMetadata | None = None
     manual_date: date | None = None
     problem: str | None = None
+    origin_id: int | None = None
+    operation_id: int | None = None
+    conflict_group: str | None = None
 
 
 def _pending(connection: Connection) -> tuple[RowMapping, ...]:
@@ -78,12 +83,11 @@ def _target(config: Configuration, item: RowMapping, profile: RowMapping, name: 
 
 
 def _plan_item(config: Configuration, row: RowMapping, profile: RowMapping, manual: date | None,
-               source: LocalSource, volume: MountedVolume, volume_id: int) -> SortItem:
-    staging = Path(row.path)
+               origin: RowMapping, root: Path, volume: MountedVolume, volume_id: int) -> SortItem:
+    staging = Path(origin.path)
     name = Path(row.source_path).name
-    item = SortItem(row.id, staging, name, profile.alias, "blocked", manual_date=manual)
-    root = config.local.staging_root
-    if row.volume_id != volume_id or not staging.is_relative_to(root) or staging == root:
+    item = SortItem(row.id, staging, name, profile.alias, "blocked", manual_date=manual, origin_id=origin.id)
+    if origin.volume_id != volume_id or not staging.is_relative_to(root) or staging == root:
         return replace(item, problem="Kopia pochodzi z innego woluminu lub katalogu stagingu.")
     try:
         destination = Destination(volume, staging.relative_to(volume.root))
@@ -93,6 +97,7 @@ def _plan_item(config: Configuration, row: RowMapping, profile: RowMapping, manu
         if size != row.size:
             return replace(item, problem="Rozmiar kopii stagingu różni się od zweryfikowanego importu.")
         relative = staging.relative_to(root)
+        source = LocalSource(volume, root)
         entry = source.attributes(relative)
         with source.open_file(relative, expected=entry) as stream:
             if file_digest(stream, "sha256").hexdigest() != row.sha256:
@@ -100,7 +105,7 @@ def _plan_item(config: Configuration, row: RowMapping, profile: RowMapping, manu
             metadata = read_metadata(stream, Path(name), config.app.timezone)
         item = replace(item, metadata=metadata)
         day = manual or (metadata.timestamp.date() if metadata.timestamp is not None else None)
-        target = _target(config, row, profile, name, day)
+        target = staging if day is None and origin.kind == "undated" else _target(config, row, profile, name, day)
     except MetadataToolError:
         raise
     except StateError as error:
@@ -123,15 +128,29 @@ def plan_sort(config: Configuration) -> tuple[SortItem, ...]:
             profiles = {source_id: history.load_source_profile(connection, source_id)
                         for source_id in {row.source_id for row in rows}}
             dates = load_sort_dates(connection)
-        local = staging_volume(config)
-        key = DeviceKey("local", local.alias)
-        volume_id = registered_volume(config, key).volume_id
-        if volume_id is None:
-            raise StateError("Staging nie ma zarejestrowanego woluminu.")
-        with verify_volume(config, key) as volume:
-            source = LocalSource(volume, config.local.staging_root)
-            return tuple(_plan_item(config, row, profiles[row.source_id], dates.get(row.id), source,
-                                    volume, volume_id) for row in rows)
+            undated = sort_moves.undated_locations(connection)
+            origins = {row.id: undated.get(row.id) or history.load_occurrence(connection, row.occurrence_id)
+                       for row in rows}
+        result = []
+        volumes: dict[DeviceKey, tuple[MountedVolume, int]] = {}
+        with ExitStack() as stack:
+            for row in rows:
+                origin = origins[row.id]
+                root = config.local.undated_root if origin.kind == "undated" else config.local.staging_root
+                profile = profiles[row.source_id]
+                local = next((volume for volume in config.local.volumes if root.is_relative_to(volume.root)), None)
+                if local is None:
+                    result.append(SortItem(row.id, Path(origin.path), Path(row.source_path).name, profile.alias,
+                                           "blocked", problem="Katalog roboczy nie leży na zarejestrowanym woluminie."))
+                    continue
+                key = DeviceKey("local", local.alias)
+                if key not in volumes:
+                    volume_id = registered_volume(config, key).volume_id
+                    if volume_id is None:
+                        raise StateError("Brak zarejestrowanego woluminu katalogu roboczego.")
+                    volumes[key] = stack.enter_context(verify_volume(config, key)), volume_id
+                result.append(_plan_item(config, row, profile, dates.get(row.id), origin, root, *volumes[key]))
+        return tuple(result)
 
 
 def set_sort_date(config: Configuration, import_id: int, value: date) -> None:
@@ -146,4 +165,8 @@ def set_sort_date(config: Configuration, import_id: int, value: date) -> None:
         with transaction(connection):
             if not any(item.id == import_id for item in _pending(connection)):
                 raise StateError("Podany import nie oczekuje na SORT.")
+            pending = next((move for move in sort_moves.load_moves(connection)
+                            if move.import_id == import_id and not move.cleanup_done), None)
+            if pending is not None:
+                raise StateError(f"Przed zmianą daty dokończ zapisaną operację przez resume {pending.operation_id}.")
             record_sort_date(connection, import_id, value)

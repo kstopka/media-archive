@@ -64,6 +64,10 @@ class Report:
                     line = f"- Import {item['id_importu']} · {item['plik']} · {item['stan']}"
                     if item["cel"]:
                         line += f" → {item['cel']}"
+                    if item["operacja"] is not None:
+                        line += f" · operacja {item['operacja']}"
+                    if item["grupa konfliktu"] is not None:
+                        line += " · kolizja nazwy"
                     if item["błąd"]:
                         line += f" · {item['błąd']}"
                     if item.get("metadane", {}).get("diagnostyka"):

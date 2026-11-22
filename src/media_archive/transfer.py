@@ -10,10 +10,11 @@ import stat
 
 from sqlalchemy.engine import Connection, RowMapping
 
-from media_archive._transfer_files import Destination, Part, TransferConflict, _file, is_transfer_part
+from media_archive._transfer_files import Destination, LinkUnavailable, Part, TransferConflict, _file, is_transfer_part
 from media_archive.config import Configuration
 from media_archive.devices import registered_volume, verify_volume
 from media_archive.operations import check_application_paths
+from media_archive.sort_conflicts import require_destination_name
 from media_archive.sources import AdbSource, LocalSource, ReadCancelled, SourceDigest, hash_source_file
 from media_archive.state import DeviceKey, StateError, open_database, transaction, validate_registered_configuration
 from media_archive.state import history, journal
@@ -50,8 +51,12 @@ def _destination(connection: Connection, config: Configuration, target: RowMappi
                     return key, path
         raise StateError("Cel archiwalny nie należy do aktualnego zarejestrowanego woluminu operacji.")
 
-    scope = (config.local.staging_root if target.kind == "staging"
-             else config.collection(target.collection_id).local_root)
+    if target.kind == "staging":
+        scope = config.local.staging_root
+    elif target.kind == "undated":
+        scope = config.local.undated_root
+    else:
+        scope = config.collection(target.collection_id).local_root
     if not path.is_relative_to(scope) or path == scope:
         raise StateError("Plik docelowy wykracza poza skonfigurowany katalog.")
     if target.kind == "local":
@@ -59,6 +64,13 @@ def _destination(connection: Connection, config: Configuration, target: RowMappi
             raise StateError("Plik docelowy blokowałby zarezerwowany katalog zbioru.")
         if config.collection_for_path(target.collection_id, path).id != target.collection_id:
             raise StateError("Cel lokalny należy do innego skonfigurowanego podzbioru.")
+    if target.kind == "undated":
+        protected = {canonical_path(item.local_root) for item in config.collections}
+        protected.add(canonical_path(config.local.staging_root))
+        protected.update(canonical_path(disk.mount) for group in config.archive_groups for disk in group.targets)
+        actual = canonical_path(scope)
+        if any(actual.is_relative_to(root) or root.is_relative_to(actual) for root in protected):
+            raise StateError("Katalog Do wyjaśnienia koliduje ze zbiorem, stagingiem lub archiwum.")
     for volume in config.local.volumes:
         if path.is_relative_to(volume.root):
             key = DeviceKey("local", volume.alias)
@@ -94,7 +106,8 @@ def _copy_source(part: Part, source: LocalSource | AdbSource, path: Path, expect
 def execute_transfer(config: Configuration, operation_id: int, *, open_source: SourceOpener,
                      record_result: ResultWriter, progress: Callable[[int, int], None] | None = None,
                      cancelled: Callable[[], bool] | None = None,
-                     locks: OperationLocks | None = None, source_occurrence_id: int | None = None) -> TransferResult:
+                     locks: OperationLocks | None = None, source_occurrence_id: int | None = None,
+                     sort_copy: bool = False) -> TransferResult:
     """Acquire the planned locks, publish without overwriting, and commit the verified result."""
     database = config.app.database_file
     check_application_paths(config)
@@ -121,9 +134,15 @@ def execute_transfer(config: Configuration, operation_id: int, *, open_source: S
                         raise StateError("Źródło próby nie odpowiada treści zaplanowanego celu.")
             expected = SourceDigest(content.sha256, content.size)
             recovery = journal.recommended_recovery(attempts[-1] if attempts else None)
-            with transaction(connection):
-                run_id = history.create_run(connection)
-                attempt = journal.start_attempt(connection, locks, operation_id, run_id, recovery=recovery)
+
+            def start(mode):
+                with transaction(connection):
+                    run = history.create_run(connection)
+                    attempt_id = journal.start_attempt(connection, locks, operation_id, run, recovery=mode,
+                                                       check_destination=sort_copy)
+                return run, attempt_id
+
+            run_id, attempt = start(recovery)
 
             def advance(state):
                 with transaction(connection):
@@ -140,11 +159,32 @@ def execute_transfer(config: Configuration, operation_id: int, *, open_source: S
                     journal.advance_attempt(connection, locks, attempt, "verified", verification_id=proof)
                 return proof
 
-            at_risk = recovery == "reconcile"
+            def confirm_absence(destination: Destination) -> None:
+                destination.ensure_absent()
+                with transaction(connection):
+                    absent = history.record_observation(connection, target.id, run_id,
+                                                        observed_at=datetime.now(timezone.utc), present=False)
+                    journal.restart_after_missing_destination(connection, locks, attempt, absent)
+
+            at_risk = recovery == "reconcile" or sort_copy
+
+            def verify_link(destination: Destination, digest: SourceDigest) -> int:
+                nonlocal at_risk
+                if cancelled is not None and cancelled():
+                    raise ReadCancelled("Anulowano transfer.")
+                require_destination_name(destination)
+                advance("transferred")
+                advance("verifying")
+                proof = verify(digest)
+                at_risk = True
+                return proof
+
             try:
                 with verify_volume(config, key, writable=True) as volume:
                     destination = Destination(volume, path)
                     proof = None
+                    if sort_copy:
+                        require_destination_name(destination)
                     if at_risk:
                         found = destination.recover_digest()
                         if found is not None:
@@ -152,10 +192,7 @@ def execute_transfer(config: Configuration, operation_id: int, *, open_source: S
                                 raise TransferConflict("Zastany cel ma inną treść. Pozostawiono go bez zmian.")
                             proof = verify(found)
                         else:
-                            with transaction(connection):
-                                absent = history.record_observation(connection, target.id, run_id,
-                                                                    observed_at=datetime.now(timezone.utc), present=False)
-                                journal.restart_after_missing_destination(connection, locks, attempt, absent)
+                            confirm_absence(destination)
                             at_risk = False
                     if proof is None:
                         if target.kind == "staging":
@@ -169,9 +206,32 @@ def execute_transfer(config: Configuration, operation_id: int, *, open_source: S
                         if cancelled is not None and cancelled():
                             raise ReadCancelled("Anulowano transfer.")
                         advance("transferring")
+                        if sort_copy:
+                            try:
+                                with open_source() as (source, source_path):
+                                    if isinstance(source, LocalSource):
+                                        with source.open_file(source_path) as stream:
+                                            proof = destination.publish_link(
+                                                stream.fileno(), lambda digest: verify_link(destination, digest),
+                                            )
+                            except LinkUnavailable:
+                                with transaction(connection):
+                                    journal.stop_attempt(connection, locks, attempt, "needs_review",
+                                                         error_code="link_unavailable")
+                                run_id, attempt = start("reconcile")
+                                require_destination_name(destination)
+                                confirm_absence(destination)
+                                at_risk = False
+                                advance("transferring")
+                    if proof is None:
                         with (open_source() as (source, source_path),
                               destination.parent(create=True) as parent,
                               Part.create(parent, f".media-archive-transfer-{run_id}", volume.mount_id) as part):
+                            if sort_copy:
+                                available, unit = destination.space()
+                                blocks = (expected.size + unit - 1) // unit
+                                if available < blocks * unit + config.app.min_free_bytes:
+                                    raise StateError("Za mało miejsca na kopię SORT i wymaganą rezerwę.")
                             _copy_source(part, source, source_path, expected, progress, cancelled)
                             with transaction(connection):
                                 if source_occurrence_id is not None:
@@ -186,7 +246,11 @@ def execute_transfer(config: Configuration, operation_id: int, *, open_source: S
                                 raise ReadCancelled("Anulowano transfer.")
                             proof = verify(copy)
                             at_risk = True
-                            part.publish(destination, status)
+                            if sort_copy:
+                                require_destination_name(destination)
+                                part.publish(destination, status, allow_link_fallback=False)
+                            else:
+                                part.publish(destination, status)
                     advance("published")
                     with transaction(connection):
                         journal.commit_result(connection, locks, attempt, record_result)

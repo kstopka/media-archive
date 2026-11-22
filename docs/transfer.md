@@ -1,6 +1,6 @@
 # Verified transfer foundation
 
-`media_archive.transfer.execute_transfer(config, operation_id, *, open_source, record_result, progress=None, cancelled=None, locks=None, source_occurrence_id=None)`
+`media_archive.transfer.execute_transfer(config, operation_id, *, open_source, record_result, progress=None, cancelled=None, locks=None, source_occurrence_id=None, sort_copy=False)`
 executes one planned [journal operation](journal.md). The caller plans the exact destination occurrence, expected SHA-256 and size, and all applicable resource locks; it supplies an opener for the verified source plus its relative path and a callback that writes the corresponding history record. It can pass an active lock group that covers the plan's resources. Imports pass the source occurrence ID so recovery can attribute a published copy to the source actually read. The [import planner](import-planning.md) supplies batch selection and free-space preflight independently of execution.
 
 ## Copy and publication
@@ -14,6 +14,8 @@ executes one planned [journal operation](journal.md). The caller plans the exact
 ## Recovery
 
 Call the same API with the same operation ID. If the previous attempt might have published, the executor independently checks the destination before opening the source. A matching file can be committed with fresh evidence. A missing destination allows a new transfer; different contents or an unsafe path require review. Reserved parts from interrupted or failed attempts remain on disk for explicit cleanup. A retry can start the file from the beginning, including over ADB.
+
+[SORT](sort.md) uses `sort_copy` to check an existing destination and normalized names before every attempt. It can publish a hard link directly from a verified local working file. It falls back to rsync when a direct link is unsuitable. SORT publishes its copied parts with a non-overwriting rename and handles removal of the old working copy after the verified publication commits.
 
 `TransferConflict` is a `StateError` for an existing or mismatching destination. Source, filesystem and verification failures leave an unfinished or failed attempt, with no successful history record. Configuration failures follow the normal registry checks. There is no automatic replacement or cleanup of failed parts. Direct filesystem edits outside the application do not participate in its resource locks.
 

@@ -1,6 +1,6 @@
 """Descriptor-based filesystem operations for one verified transfer."""
 
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import ExitStack, contextmanager
 import ctypes
 from dataclasses import dataclass
@@ -26,6 +26,10 @@ def is_transfer_part(name: str) -> bool:
 
 class TransferConflict(StateError):
     """An existing destination was left in place."""
+
+
+class LinkUnavailable(StateError):
+    """The mount refused to publish a hard link."""
 
 
 def _signature(status: os.stat_result) -> tuple[int, ...]:
@@ -149,7 +153,19 @@ class Destination:
         except FileNotFoundError:
             return None
 
-    def recover_digest(self) -> SourceDigest | None:
+    def sibling_names(self, name_key: Callable[[str], str]) -> tuple[str, ...]:
+        """List target names only under an unambiguous spelling of each parent."""
+        parts = self.path.parent.parts
+        with self._parents(nearest=True) as directories:
+            for name, directory in zip(parts, directories):
+                matches = [entry for entry in os.listdir(directory) if name_key(entry) == name_key(name)]
+                if matches and matches != [name]:
+                    raise StateError("Nazwa katalogu docelowego koliduje po normalizacji.")
+            if len(directories) != len(parts) + 1:
+                return ()
+            return tuple(os.listdir(directories[-1]))
+
+    def recover_digest(self, *, sync: bool = True) -> SourceDigest | None:
         """Return fresh proof of an existing regular file, or confirmed absence."""
         try:
             with self.parent() as parent:
@@ -158,13 +174,86 @@ class Destination:
                     self.check_parent(parent)
                     if _signature(os.stat(self.path.name, dir_fd=parent, follow_symlinks=False)) != _signature(status):
                         raise StateError("Plik docelowy zmienił się podczas sprawdzania.")
-                    os.fsync(fd)
-                    self.check_parent(parent, sync=True)
+                    if sync:
+                        os.fsync(fd)
+                        self.check_parent(parent, sync=True)
                     return digest
         except FileNotFoundError:
             # A vanished parent or leaf after opening is not proof of absence.
             self.ensure_absent()
             return None
+
+    def publish_link(self, source_fd: int, record_proof: Callable[[SourceDigest], int]) -> int | None:
+        """Publish directly from a pinned working file without a retained alias."""
+        if _mount_id(source_fd) != self.volume.mount_id or os.fstat(source_fd).st_nlink != 1:
+            return None
+        with self.parent(create=True) as parent:
+            digest, status = _read_digest(source_fd)
+            if status.st_nlink != 1:
+                return None
+            os.fsync(source_fd)
+            proof = record_proof(digest)
+            self.check_parent(parent)
+            if _signature(os.fstat(source_fd)) != _signature(status):
+                raise StateError("Kopia robocza zmieniła się od weryfikacji.")
+            try:
+                os.link(f"/proc/self/fd/{source_fd}", self.path.name, dst_dir_fd=parent, follow_symlinks=True)
+            except FileExistsError:
+                raise TransferConflict("Plik docelowy już istnieje. Pozostawiono go bez zmian.") from None
+            except OSError as error:
+                if error.errno in (errno.EXDEV, errno.EPERM, errno.EOPNOTSUPP, errno.EMLINK, errno.ENOSYS):
+                    raise LinkUnavailable("Wolumin nie obsługuje publikacji przez twarde dowiązanie.") from None
+                raise
+            self.check_parent(parent, sync=True)
+            published = os.stat(self.path.name, dir_fd=parent, follow_symlinks=False)
+            # Linking updates ctime on the same inode.
+            if _signature(published)[:-1] != _signature(status)[:-1]:
+                raise StateError("Opublikowany plik zmienił się przed zapisaniem wyniku.")
+            return proof
+
+    @contextmanager
+    def keep_verified(self, expected: SourceDigest) -> Generator[Callable[[], None], None, None]:
+        """Pin the verified published file and let cleanup recheck it before unlinking."""
+        try:
+            with self.parent() as parent, _open_regular(parent, self.path.name, self.volume.mount_id) as fd:
+                digest, status = _read_digest(fd)
+                if digest != expected:
+                    raise StateError("Gotowa kopia SORT nie zgadza się z historią. Pozostawiono kopię roboczą.")
+                os.fsync(fd)
+                self.check_parent(parent, sync=True)
+
+                def confirm() -> None:
+                    try:
+                        self.check_parent(parent)
+                        current = os.stat(self.path.name, dir_fd=parent, follow_symlinks=False)
+                    except OSError:
+                        raise StateError("Gotowa kopia SORT zniknęła przed usunięciem kopii roboczej.") from None
+                    if _signature(current) != _signature(status):
+                        raise StateError("Gotowa kopia SORT zmieniła się przed usunięciem kopii roboczej.")
+
+                confirm()
+                yield confirm
+        except FileNotFoundError:
+            raise StateError("Brak gotowej kopii SORT. Pozostawiono kopię roboczą.") from None
+
+    def remove_verified(self, expected: SourceDigest, before_remove: Callable[[], None]) -> None:
+        """Unlink an owned copy only while its pinned content and directory still match."""
+        try:
+            with self.parent() as parent:
+                try:
+                    with _open_regular(parent, self.path.name, self.volume.mount_id) as fd:
+                        digest, status = _read_digest(fd)
+                        self.check_parent(parent)
+                        actual = os.stat(self.path.name, dir_fd=parent, follow_symlinks=False)
+                        if digest != expected or _signature(actual) != _signature(status):
+                            raise StateError("Kopia robocza uległa zmianie. Pozostawiono ją na miejscu.")
+                        before_remove()
+                        os.unlink(self.path.name, dir_fd=parent)
+                except FileNotFoundError:
+                    self.ensure_absent()
+                self.check_parent(parent, sync=True)
+        except FileNotFoundError:
+            self.ensure_absent()
 
 
 @contextmanager
@@ -232,7 +321,7 @@ class Part:
             os.fsync(fd)
             return digest, status
 
-    def publish(self, destination: Destination, verified: os.stat_result) -> None:
+    def publish(self, destination: Destination, verified: os.stat_result, *, allow_link_fallback: bool = True) -> None:
         destination.check_parent(self.parent)
         if _signature(os.stat("copy", dir_fd=self.directory, follow_symlinks=False)) != _signature(verified):
             raise StateError("Część zmieniła się od weryfikacji.")
@@ -240,7 +329,7 @@ class Part:
             try:
                 _rename_noreplace(self.directory, "copy", self.parent, destination.path.name)
             except OSError as error:
-                if error.errno not in (errno.ENOSYS, errno.EINVAL, errno.EOPNOTSUPP):
+                if not allow_link_fallback or error.errno not in (errno.ENOSYS, errno.EINVAL, errno.EOPNOTSUPP):
                     raise
                 # A filesystem without rename flags can still publish a new name
                 # with link(2). Never fall back to a rename that overwrites.

@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import stat
 
-from sqlalchemy.engine import Connection
+from sqlalchemy.engine import Connection, RowMapping
 
 from media_archive._transfer_files import Destination
 from media_archive.audit import _Scan, _scan
@@ -17,7 +17,8 @@ from media_archive.import_journal import ImportOperation, commit_import, load_im
 from media_archive.operations import check_application_paths
 from media_archive.phone_initialization import _archive_group, _archive_matches
 from media_archive.sources import LocalSource, SourceDigest, hash_source_file, open_local_source
-from media_archive.state import DeviceKey, StateError, history, journal, open_database, transaction
+from media_archive.sort_execution import inspect_sort_recovery, load_sort_operation, record_restored_sort
+from media_archive.state import DeviceKey, StateError, history, journal, open_database, sort_moves, transaction
 from media_archive.state.audit import load_full_audit
 from media_archive.state.initialization import load_initialization
 from media_archive.state.locking import (
@@ -102,30 +103,48 @@ def _baseline_evidence(config: Configuration, connection: Connection, audit_ids:
     return len(used)
 
 
-def _scan_staging(mounted: MountedVolume, staging: Path,
-                  expected: dict[Path, SourceDigest]) -> dict[Path, SourceDigest]:
+def _scan_working(mounted: MountedVolume, root: Path, expected: dict[Path, SourceDigest],
+                  *, label: str) -> dict[Path, SourceDigest]:
     try:
-        with Destination(mounted, (staging / "probe").relative_to(mounted.root)).parent():
+        with Destination(mounted, (root / "probe").relative_to(mounted.root)).parent():
             scan = _Scan()
-            _scan(LocalSource(mounted, staging), scan)
+            _scan(LocalSource(mounted, root), scan)
             if scan.errors:
-                raise StateError("Nie ukończono odczytu stagingu po przywróceniu bazy.")
+                raise StateError(f"Nie ukończono odczytu katalogu {label} po przywróceniu bazy.")
     except FileNotFoundError:
         return {}
     found = {}
     for relative, entry in scan.entries.items():
-        path = staging / relative
+        path = root / relative
         if stat.S_ISDIR(entry.mode):
             if path in expected:
-                raise StateError(f"Katalog zajmuje ścieżkę pliku stagingu: {relative.as_posix()}.")
+                raise StateError(f"Katalog zajmuje ścieżkę pliku w {label}: {relative.as_posix()}.")
             continue
         if path not in expected or not stat.S_ISREG(entry.mode):
-            raise StateError(f"Staging zawiera nierozpoznany wpis: {relative.as_posix()}.")
+            raise StateError(f"Katalog {label} zawiera nierozpoznany wpis: {relative.as_posix()}.")
         digest = Destination(mounted, path.relative_to(mounted.root)).recover_digest()
         if digest != expected[path]:
-            raise StateError(f"Treść stagingu różni się od historii: {relative.as_posix()}.")
+            raise StateError(f"Treść pliku w {label} różni się od historii: {relative.as_posix()}.")
         found[path] = digest
     return found
+
+
+def _scan_undated(config: Configuration, targets: tuple[RowMapping, ...]) -> dict[Path, SourceDigest]:
+    root = config.local.undated_root
+    local = next((volume for volume in config.local.volumes if root.is_relative_to(volume.root)), None)
+    if local is None:
+        if targets or root.exists():
+            raise StateError("Katalog Do wyjaśnienia nie leży na zarejestrowanym woluminie.")
+        return {}
+    key = DeviceKey("local", local.alias)
+    volume_id = registered_volume(config, key).volume_id
+    expected = {Path(entry.path): SourceDigest(entry.sha256, entry.size) for entry in targets
+                if entry.volume_id == volume_id and Path(entry.path).is_relative_to(root)}
+    try:
+        with verify_volume(config, key) as mounted:
+            return _scan_working(mounted, root, expected, label="Do wyjaśnienia")
+    except OSError:
+        raise StateError("Nie można bezpiecznie sprawdzić katalogu Do wyjaśnienia.") from None
 
 
 def reconcile_imports(config: Configuration, audit_ids: Iterable[str] = ()) -> dict[str, object]:
@@ -140,8 +159,13 @@ def reconcile_imports(config: Configuration, audit_ids: Iterable[str] = ()) -> d
                 raise StateError("Baza nie wymaga uzgodnienia po przywróceniu.")
             phones = {phone.alias: history.load_source_id(connection, "phone", phone.alias) for phone in config.phones}
             operations = journal.load_unfinished(connection)
-            resources = {resource for operation in operations for resource in journal.load_resources(connection, operation.id)}
+            sort_ids = {move.operation_id for move in sort_moves.load_moves(connection) if not move.cleanup_done
+                        } if sort_moves.supported(connection) else set()
+            operation_ids = {operation.id for operation in operations} | sort_ids
+            resources = {resource for operation_id in operation_ids
+                         for resource in journal.load_resources(connection, operation_id)}
         resources.add(Resource("collection", str(canonical_path(staging))))
+        resources.add(Resource("collection", str(canonical_path(config.local.undated_root))))
         resources.update(collection_resource(config, phone.collection_id) for phone in config.phones)
         resources.update(Resource("source", str(source_id)) for source_id in phones.values())
         resources.update(Resource("archive", group.id) for group in config.archive_groups)
@@ -150,8 +174,12 @@ def reconcile_imports(config: Configuration, audit_ids: Iterable[str] = ()) -> d
             with connection.begin():
                 if load_reconciliation(connection) != restored:
                     raise StateError("Stan przywrócenia zmienił się przed rozpoczęciem uzgodnienia.")
-                operations = [load_import_operation(connection, row.id) for row in journal.load_unfinished(connection)]
+                unfinished = journal.load_unfinished(connection)
+                planned_sort = [load_sort_operation(connection, operation_id) for operation_id in sorted(sort_ids)]
+                operations = [load_import_operation(connection, row.id) for row in unfinished if row.id not in sort_ids]
                 imports = history.load_staged_imports(connection)
+                undated = sort_moves.undated_locations(connection)
+                known_undated = sort_moves.undated_targets(connection)
                 expected = {}
                 for operation in operations:
                     content = history.load_content(connection, operation.target.content_id)
@@ -162,7 +190,8 @@ def reconcile_imports(config: Configuration, audit_ids: Iterable[str] = ()) -> d
             volume_id = registered_volume(config, key).volume_id
             latest = {(entry.source_id, entry.content_id): entry for entry in imports}
             pending = [entry for entry in latest.values() if entry.placement_id is None]
-            for row in [*pending, *(entry.target for entry in operations)]:
+            for row in [*(entry for entry in pending if entry.id not in undated),
+                        *(entry.target for entry in operations)]:
                 path = Path(row.path)
                 if row.volume_id != volume_id or not path.is_relative_to(staging) or path == staging:
                     raise StateError("Oczekujący materiał należy do innego woluminu lub katalogu stagingu.")
@@ -171,9 +200,27 @@ def reconcile_imports(config: Configuration, audit_ids: Iterable[str] = ()) -> d
                     expected[Path(entry.path)] = SourceDigest(entry.sha256, entry.size)
             try:
                 with verify_volume(config, key) as mounted:
-                    found = _scan_staging(mounted, staging, expected)
+                    found = _scan_working(mounted, staging, expected, label="staging")
             except OSError:
                 raise StateError("Nie można bezpiecznie sprawdzić stagingu po przywróceniu bazy.") from None
+            found_undated = _scan_undated(config, known_undated)
+            sort_evidence = []
+            for operation in planned_sort:
+                with open_database(database) as read:
+                    try:
+                        digest = inspect_sort_recovery(config, read, operation)
+                    except StateError as error:
+                        raise StateError(f"Operacja SORT {operation.operation.id} wymaga sprawdzenia. {error}") from None
+                sort_evidence.append((operation, digest))
+            recovered_sorts = {operation.move.import_id for operation, digest in sort_evidence if digest is not None}
+            missing_material = []
+            for entry in pending:
+                if entry.id in recovered_sorts:
+                    continue
+                current = undated.get(entry.id)
+                present = Path(current.path) in found_undated if current is not None else Path(entry.path) in found
+                if not present:
+                    missing_material.append({"id_importu": entry.id, "staging": current.path if current else entry.path})
             matched = 0
             absent = 0
             with transaction(connection):
@@ -185,13 +232,14 @@ def reconcile_imports(config: Configuration, audit_ids: Iterable[str] = ()) -> d
                         matched += 1
                     else:
                         absent += 1
+                for operation, digest in sort_evidence:
+                    record_restored_sort(connection, locks, operation, digest)
             return {
                 "Generacja": restored.generation_id, "Pełne audyty użyte do uzgodnienia": audits,
                 "Zweryfikowane pliki stagingu": len(found), "Zatwierdzone próby": matched,
                 "Próby z potwierdzonym brakiem celu": absent,
-                "Brakujące materiały wymagające jawnego reimportu": [
-                    {"id_importu": entry.id, "staging": entry.path} for entry in pending if Path(entry.path) not in found
-                ],
+                "Sprawdzone operacje SORT": len(sort_evidence),
+                "Brakujące materiały wymagające jawnego reimportu": missing_material,
             }
 
 

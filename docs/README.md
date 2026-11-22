@@ -26,6 +26,7 @@ Current coverage includes the package and CLI, configuration, SQLite lifecycle, 
 | [phone-import.md](phone-import.md) | Fill baseline gaps and import new content from a registered phone through ADB |
 | [import-recovery.md](import-recovery.md) | Resume a journaled import, reimport missing material and reconcile restored state |
 | [sort-planning.md](sort-planning.md) | Read capture dates, preview SORT paths and record a manual date |
+| [sort.md](sort.md) | Publish verified placements, preserve conflicts and recover interrupted moves |
 | [cli.md](cli.md) | Setup, migrations, planning, journal previews and report retention |
 | [snapshots.md](snapshots.md) | Manual state snapshots, validation and restore |
 | [development.md](development.md) | Environment, tests, change locations and documentation maintenance |
@@ -81,7 +82,7 @@ These documents use neutral examples and do not depend on private planning notes
 | Phone initialization | Fixed ADB baseline and initial decisions against saved local and archive evidence |
 | Camera import | Verified import from registered cards to staging |
 | Phone import | Verified ADB import to staging, including completion of pending baseline processing |
-| SORT | Read-only staging preview with ExifTool and explicit date decisions. Execution is planned. |
+| SORT | Read-only preview, verified placement and cleanup, explicit date decisions and durable name conflicts |
 | BACKUP | Planned |
 | Backup menu/month availability | Not implemented; configuration records intended scope and filtering mode |
 | Configuration wizard | Future enhancement; settings are currently edited in `.env` |

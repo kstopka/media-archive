@@ -7,7 +7,7 @@ from typing import Literal
 from media_archive._encoding import require_utf8
 from media_archive.config import ConfigError, Configuration
 from media_archive.devices import inspect_volume, registered_volume, verify_volume
-from media_archive.state import DeviceKey, StateError, migrate_database, open_database, schema_version
+from media_archive.state import DeviceKey, StateError, migrate_database, open_database, schema_version, sort_moves
 from media_archive.state.journal import load_attempts, load_operation, load_unfinished, recommended_recovery
 from media_archive.state.migrations import _head_revision
 from media_archive.state.reconciliation import load_reconciliation
@@ -130,24 +130,30 @@ def pending(config: Configuration, operation_id: int | None = None) -> dict[str,
     with open_database(config.app.database_file) as connection:
         if schema_version(connection) in ("0001", "0002", "0003"):
             raise StateError("Podgląd operacji wymaga jawnej migracji bazy.")
-        operations = load_unfinished(connection) if operation_id is None else (load_operation(connection, operation_id),)
+        cleanup = ({move.operation_id for move in sort_moves.load_moves(connection)
+                    if move.verification_id is not None and not move.cleanup_done}
+                   if sort_moves.supported(connection) else set())
+        operations = ((*load_unfinished(connection), *(load_operation(connection, item) for item in sorted(cleanup)))
+                      if operation_id is None else (load_operation(connection, operation_id),))
         reconciliation_required = load_reconciliation(connection) is not None
         reconcile_first = "Przed wznowieniem uzgodnij przywrócony stan z nośnikami przez reconcile."
         result = []
         for operation in operations:
             attempts = load_attempts(connection, operation.id)
             last = attempts[-1] if attempts else None
-            if last is not None and last.state == "committed":
+            if last is not None and last.state == "committed" and operation.id not in cleanup:
                 raise StateError("Operacja ma już zatwierdzony wynik.")
             item = {
                 "id_operacji": operation.id,
-                "stan": last.state if last else "planned",
+                "stan": "oczekuje na usunięcie kopii roboczej" if operation.id in cleanup else last.state if last else "planned",
                 "id_uruchomienia": last.run_id if last else None,
             }
             if operation_id is not None:
                 recovery = recommended_recovery(last)
                 if reconciliation_required:
                     step = reconcile_first
+                elif operation.id in cleanup:
+                    step = "Zweryfikuj gotową kopię i dokończ usuwanie kopii roboczej przez resume."
                 elif recovery == "restart":
                     step = 'Po uzyskaniu blokad jawnie przejmij próbę w trybie recovery="restart" i wznów transfer.'
                 elif recovery == "reconcile":

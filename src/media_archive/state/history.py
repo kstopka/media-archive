@@ -16,7 +16,7 @@ from ._history_queries import find, insert_id, require_row, require_write_transa
 from .errors import StateError
 
 
-OccurrenceKind = Literal["source", "staging", "local", "archive"]
+OccurrenceKind = Literal["source", "staging", "local", "archive", "undated"]
 ReadScope = Literal["full", "partial"]
 
 
@@ -109,7 +109,7 @@ def record_occurrence(
         raise StateError("Lokalizacja na urządzeniu wymaga wskazania woluminu.")
     slot = _device_slot(connection, device_id) if device_id is not None else None
     source_id = None
-    absolute = kind in ("staging", "local")
+    absolute = kind in ("staging", "local", "undated")
     if kind == "source":
         if slot is None or slot.role not in ("phone", "card") or slot.source_id is None:
             raise StateError("Wystąpienie źródłowe wymaga urządzenia przypisanego do profilu.")
@@ -120,7 +120,7 @@ def record_occurrence(
     elif kind == "archive":
         if slot is None or slot.role != "archive" or volume_id is None:
             raise StateError("Wystąpienie archiwalne wymaga woluminu archiwum.")
-    elif kind in ("local", "staging"):
+    elif kind in ("local", "staging", "undated"):
         if slot is not None and slot.role != "local":
             raise StateError("Wystąpienie lokalne wymaga woluminu lokalnego.")
     else:
@@ -283,7 +283,7 @@ def load_occurrence(connection: Connection, occurrence_id: int) -> RowMapping:
 def load_occurrences(connection: Connection, kind: OccurrenceKind, path: str) -> tuple[RowMapping, ...]:
     """Read distinct historical occurrences at a path, including reused paths."""
     require_utf8(kind, StateError)
-    absolute = kind in ("staging", "local") or (kind == "source" and isinstance(path, str) and path.startswith("/"))
+    absolute = kind in ("staging", "local", "undated") or (kind == "source" and isinstance(path, str) and path.startswith("/"))
     return tuple(connection.execute(
         history.occurrences.select().filter_by(kind=kind, path=str(_path(path, absolute=absolute)))
         .order_by(history.occurrences.c.id)
@@ -338,6 +338,10 @@ def load_imports(connection: Connection, source_id: int) -> tuple[RowMapping, ..
             history.imports, history.occurrences, history.imports.c.source_occurrence_id == history.occurrences.c.id,
         ).where(history.occurrences.c.source_id == source_id).order_by(history.imports.c.id)
     ).mappings())
+
+
+def load_import(connection: Connection, import_id: int) -> RowMapping:
+    return require_row(connection, history.imports, id=import_id)
 
 
 def load_staged_imports(connection: Connection, source_id: int | None = None) -> tuple[RowMapping, ...]:

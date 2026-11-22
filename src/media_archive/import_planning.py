@@ -1,7 +1,7 @@
 """Build one verified source manifest for import preview and execution."""
 
 from collections.abc import Callable, Iterable
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import json
@@ -22,7 +22,7 @@ from media_archive.import_journal import import_operation_key
 from media_archive.operations import check_application_paths
 from media_archive.sources import ReadCancelled, hash_source_file, open_adb_source, open_camera_source
 from media_archive.state import DeviceKey, StateError, open_database, transaction, validate_registered_configuration
-from media_archive.state import history, journal
+from media_archive.state import history, journal, sort_moves
 from media_archive.state.initialization import Initialization, load_initialization
 from media_archive.state.locking import (
     OperationLocks, Resource, canonical_path, installation_lock, lock_resources, require_locks,
@@ -272,6 +272,7 @@ def _preflight(config: Configuration, plan: ImportPlan, connection: Connection, 
     staging = config.local.staging_root
     with connection.begin():
         latest = {entry.content_id: entry for entry in history.load_staged_imports(connection, plan.source_id)}
+        undated = sort_moves.undated_locations(connection)
     pending = [entry for entry in latest.values() if entry.placement_id is None]
     copying = any(item.destination is not None for item in plan.items)
     if not pending and not copying:
@@ -280,16 +281,31 @@ def _preflight(config: Configuration, plan: ImportPlan, connection: Connection, 
         volume = staging_volume(config)
         key = DeviceKey("local", volume.alias)
         volume_id = registered_volume(config, key).volume_id
-        with verify_volume(config, key, writable=copying) as mounted:
+        with ExitStack() as stack:
+            mounted = stack.enter_context(verify_volume(config, key, writable=copying))
+            locations = {key: (mounted, volume_id)}
             reimports = {(item.sha256, item.size) for item in plan.items if item.decision == "reimport"}
             missing = []
             missing_contents = set()
             for entry in pending:
-                path = Path(entry.path)
-                if (entry.volume_id != volume_id or not path.is_relative_to(staging) or path == staging
-                        or Destination(mounted, path.relative_to(volume.root)).file_size() != entry.size):
+                copy = undated.get(entry.id, entry)
+                root = config.local.undated_root if entry.id in undated else staging
+                path = Path(copy.path)
+                local = next((item for item in config.local.volumes if root.is_relative_to(item.root)), None)
+                present = False
+                if local is not None and path != root and path.is_relative_to(root):
+                    local_key = DeviceKey("local", local.alias)
+                    if local_key not in locations:
+                        locations[local_key] = (
+                            stack.enter_context(verify_volume(config, local_key, writable=False)),
+                            registered_volume(config, local_key).volume_id,
+                        )
+                    read_mount, episode = locations[local_key]
+                    present = (copy.volume_id == episode
+                               and Destination(read_mount, path.relative_to(local.root)).file_size() == entry.size)
+                if not present:
                     missing_contents.add((entry.sha256, entry.size))
-                    missing.append(MissingStaging(entry.id, entry.path, entry.sha256,
+                    missing.append(MissingStaging(entry.id, copy.path, entry.sha256,
                                                   (entry.sha256, entry.size) in reimports))
             plan = replace(plan, missing_staging=tuple(missing))
             if baseline_pending and reimports - missing_contents:

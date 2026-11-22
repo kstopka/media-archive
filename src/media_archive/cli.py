@@ -18,6 +18,7 @@ from media_archive.inventory import inventory
 from media_archive.phone_initialization import initialize_phone
 from media_archive.phone_import import import_phone
 from media_archive.reports import Report, write_report
+from media_archive.sort_execution import SortResult, execute_sort, is_sort_operation, resume_sort
 from media_archive.sort_planning import SortItem, plan_sort, set_sort_date
 from media_archive.state import DatabasePublishedError, DeviceKey, StateError
 from media_archive.state.snapshots import SnapshotPublishedError, create_snapshot, restore_snapshot, validate_snapshot
@@ -88,14 +89,17 @@ def _import_details(plan: ImportPlan) -> dict[str, object]:
     return details
 
 
-def _sort_details(plan: tuple[SortItem, ...]) -> dict[str, object]:
+def _sort_details(plan: tuple[SortItem, ...], outcomes: tuple[str, ...] | None = None) -> dict[str, object]:
     rows = []
-    for item in plan:
+    states = {"ready": "gotowy", "undated": "do wyjaśnienia", "blocked": "zablokowany",
+              "placed": "w zbiorze", "interrupted": "przerwano"}
+    for index, item in enumerate(plan):
         metadata = item.metadata
         row = {
             "id_importu": item.import_id, "plik": item.name, "profil": item.profile,
+            "operacja": item.operation_id, "grupa konfliktu": item.conflict_group,
             "staging": str(item.staging), "cel": str(item.target) if item.target is not None else None,
-            "stan": {"ready": "gotowy", "undated": "do wyjaśnienia", "blocked": "zablokowany"}[item.state],
+            "stan": states[outcomes[index] if outcomes is not None else item.state],
             "ręczna_data": item.manual_date.isoformat() if item.manual_date else None, "błąd": item.problem,
         }
         if metadata is not None:
@@ -110,11 +114,20 @@ def _sort_details(plan: tuple[SortItem, ...]) -> dict[str, object]:
             "Zablokowane pliki": sum(item.state == "blocked" for item in plan), "Plan SORT": rows}
 
 
+def _sort_result(results: tuple[SortResult, ...]) -> tuple[int, str, dict[str, object]]:
+    statuses = tuple(result.status for result in results)
+    code = 130 if "interrupted" in statuses else 3 if {"blocked", "undated"}.intersection(statuses) else 0
+    message = "Przerwano SORT." if code == 130 else "SORT wymaga uwagi." if code else "SORT ukończony."
+    details = _sort_details(tuple(result.item for result in results), outcomes=statuses)
+    details["Przeniesiono do zbioru"] = statuses.count("placed")
+    return code, message, details
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="media-archive",
         description="Lokalne narzędzie do importu, porządkowania i archiwizacji mediów.",
-        epilog="Dostępny jest AUDIT, pierwszy spis, import i podgląd SORT. Wykonanie SORT i BACKUP "
+        epilog="Dostępny jest AUDIT, pierwszy spis, import i SORT. Operacje BACKUP "
                "nie są jeszcze zaimplementowane.",
     )
     parser.add_argument("--config", metavar="PLIK", help="plik konfiguracji (domyślnie .env)")
@@ -124,7 +137,7 @@ def _parser() -> argparse.ArgumentParser:
     setup.add_argument("--yes", action="store_true", help="potwierdź utworzenie bazy i zapis rejestru")
     migrate = commands.add_parser("migrate", help="zaktualizuj schemat istniejącej bazy")
     commands.add_parser("pending", help="wyświetl niedokończone operacje")
-    resume = commands.add_parser("resume", help="wznów import albo pokaż plan odzyskiwania")
+    resume = commands.add_parser("resume", help="wznów IMPORT lub SORT albo pokaż plan odzyskiwania")
     resume.add_argument("operation_id", type=_operation_id, metavar="ID_OPERACJI")
     resume.add_argument("--card", metavar="KARTA")
     resume.add_argument("--mount", type=Path, metavar="KATALOG")
@@ -153,7 +166,7 @@ def _parser() -> argparse.ArgumentParser:
     import_parser.add_argument("--mount", type=Path, metavar="KATALOG")
     import_parser.add_argument("--reimport", action="append", default=[], metavar="ŚCIEŻKA",
                                help="zaplanuj ponowny import wskazanego pliku względnie do katalogu źródła")
-    sort = commands.add_parser("sort", help="pokaż podgląd sortowania zweryfikowanych importów")
+    sort = commands.add_parser("sort", help="uporządkuj zweryfikowane importy")
     sort_date = commands.add_parser("sort-date", help="zapisz ręczną datę importu oczekującego na SORT")
     sort_date.add_argument("import_id", type=_operation_id, metavar="ID_IMPORTU")
     sort_date.add_argument("date", type=_sort_date, metavar="RRRR-MM-DD")
@@ -184,8 +197,6 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         parser.error("Użyj setup --dry-run, aby zobaczyć plan, albo setup --yes, aby go wykonać.")
     if args.command == "restore" and (args.config is None or not args.yes):
         parser.error("Użyj --config PLIK restore GENERACJA --yes.")
-    if args.command == "sort" and not args.dry_run:
-        parser.error("Użyj sort --dry-run, aby wyświetlić podgląd sortowania.")
     if args.command in ("import", "resume") and (args.card is None) != (args.mount is None):
         parser.error("Import z karty wymaga jednocześnie --card i --mount.")
     if args.command == "audit":
@@ -217,7 +228,7 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if args.command == "device":
         dry_run = args.device_action != "check" and not getattr(args, "yes", False)
     save_report = getattr(args, "report", False) or (
-        args.command in ("setup", "migrate", "audit", "inventory", "init-phone", "import", "resume", "reconcile")
+        args.command in ("setup", "migrate", "audit", "inventory", "init-phone", "import", "resume", "reconcile", "sort")
         and not dry_run
     )
     try:
@@ -296,12 +307,20 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                     ],
                 })
         elif args.command == "resume" and not dry_run:
-            code, message, details = resume_import(config, args.operation_id, card=args.card, mount=args.mount)
+            if is_sort_operation(config, args.operation_id):
+                if args.card is not None:
+                    raise ConfigError("Wznowienie SORT korzysta z lokalnej kopii roboczej.")
+                code, message, details = _sort_result((resume_sort(config, args.operation_id),))
+            else:
+                code, message, details = resume_import(config, args.operation_id, card=args.card, mount=args.mount)
         elif args.command == "sort":
-            plan = plan_sort(config)
-            details = _sort_details(plan)
-            code = 3 if any(item.state != "ready" for item in plan) else 0
-            message = "Podgląd SORT wymaga uwagi." if code else "Podgląd SORT gotowy."
+            if dry_run:
+                plan = plan_sort(config)
+                details = _sort_details(plan)
+                code = 3 if any(item.state != "ready" for item in plan) else 0
+                message = "Podgląd SORT wymaga uwagi." if code else "Podgląd SORT gotowy."
+            else:
+                code, message, details = _sort_result(execute_sort(config))
         elif args.command == "sort-date":
             set_sort_date(config, args.import_id, args.date)
             details = {"ID importu": args.import_id, "Ręczna data": args.date.isoformat()}

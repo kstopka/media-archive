@@ -59,6 +59,7 @@ Paths below are relative to the repository root.
 | [phone_import.py](../src/media_archive/phone_import.py) | Import phone media through ADB and complete baseline processing |
 | [import_recovery.py](../src/media_archive/import_recovery.py), [import_restore.py](../src/media_archive/import_restore.py) | Resume a saved import or reconcile staging and archive evidence after restore |
 | [metadata.py](../src/media_archive/metadata.py), [sort_planning.py](../src/media_archive/sort_planning.py) | Read embedded capture dates through ExifTool and preview a verified import's SORT destination |
+| [sort_execution.py](../src/media_archive/sort_execution.py), [sort_conflicts.py](../src/media_archive/sort_conflicts.py) | Journal executable SORT moves, preserve name conflicts and resume cleanup |
 | [state/database.py](../src/media_archive/state/database.py) | Explicit creation/opening, connection lifetime, short transactions and migration entry point |
 | [state/migrations.py](../src/media_archive/state/migrations.py) | Application identity, Alembic revision validation and migration entry point |
 | [state/registry.py](../src/media_archive/state/registry.py) | Trusted identity reads, configuration checks and explicit registration |
