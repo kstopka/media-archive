@@ -261,14 +261,44 @@ def assign_archive_pair(
     ))
 
 
+def pin_archive_path(connection: Connection, local_occurrence_id: int, device_id: int, path: str) -> None:
+    """Finalize one member's required path before its first copy."""
+    require_write_transaction(connection)
+    pair = require_row(connection, history.pairs, local_occurrence_id=local_occurrence_id)
+    if device_id not in (pair.first_device_id, pair.second_device_id):
+        raise StateError("Ścieżka wymaga urządzenia należącego do zapisanej pary.")
+    local = load_occurrence(connection, local_occurrence_id)
+    group = require_row(connection, registry.archive_groups, id=_device_slot(connection, device_id).group_id)
+    required = _path(path, absolute=False)
+    if _archive_path_owner(connection, group, required) != local.collection_id:
+        raise StateError("Ścieżka kopii należy do innego zarejestrowanego zbioru.")
+    key = {"local_occurrence_id": local_occurrence_id, "device_id": device_id}
+    existing = find(connection, history.archive_paths, **key)
+    if existing is not None:
+        if existing.path != str(required):
+            raise StateError("Wymagana ścieżka na tym dysku jest już zapisana.")
+        return
+    connection.execute(history.archive_paths.insert().values(**key, path=str(required)))
+
+
+def load_archive_paths(connection: Connection, local_occurrence_id: int) -> tuple[RowMapping, ...]:
+    return tuple(connection.execute(history.archive_paths.select().filter_by(
+        local_occurrence_id=local_occurrence_id,
+    )).mappings())
+
+
 def record_archive_copy(connection: Connection, local_occurrence_id: int, verification_id: int) -> None:
     """Link a verified archive occurrence to its previously recorded requirement."""
     require_write_transaction(connection)
     local = load_occurrence(connection, local_occurrence_id)
     pair = require_row(connection, history.pairs, local_occurrence_id=local.id)
     archive = _verified_destination(connection, local, verification_id, "archive")
-    if archive.path != pair.required_path or archive.device_id not in (pair.first_device_id, pair.second_device_id):
+    pinned = find(connection, history.archive_paths, local_occurrence_id=local.id, device_id=archive.device_id)
+    required = pinned.path if pinned is not None else pair.required_path
+    if archive.path != required or archive.device_id not in (pair.first_device_id, pair.second_device_id):
         raise StateError("Zweryfikowana kopia nie odpowiada zapisanemu celowi.")
+    if pinned is None:
+        pin_archive_path(connection, local.id, archive.device_id, archive.path)
     if find(connection, history.copies, verification_id=verification_id, local_occurrence_id=local.id) is not None:
         return
     connection.execute(history.copies.insert().values(
@@ -407,11 +437,16 @@ def load_archive_pair(connection: Connection, local_occurrence_id: int) -> RowMa
 def load_backup_assignments(connection: Connection, collections: set[str]) -> tuple[RowMapping, ...]:
     """Read saved assignments with the identity of the local bytes they cover."""
     local = history.occurrences
+    first, second = history.archive_paths.alias("first_path"), history.archive_paths.alias("second_path")
     query = (select(local.c.path, local.c.volume_id, local.c.collection_id, history.contents.c.sha256,
                     history.contents.c.size, history.pairs.c.first_device_id, history.pairs.c.second_device_id,
-                    history.pairs.c.required_path)
+                    history.pairs.c.required_path, first.c.path.label("first_path"), second.c.path.label("second_path"))
              .select_from(history.pairs).join(local, local.c.id == history.pairs.c.local_occurrence_id)
              .join(history.contents, history.contents.c.id == local.c.content_id)
+             .outerjoin(first, (first.c.local_occurrence_id == local.c.id)
+                        & (first.c.device_id == history.pairs.c.first_device_id))
+             .outerjoin(second, (second.c.local_occurrence_id == local.c.id)
+                        & (second.c.device_id == history.pairs.c.second_device_id))
              .where(local.c.collection_id.in_(collections)))
     return tuple(connection.execute(query).mappings())
 
@@ -425,3 +460,22 @@ def load_archive_copies(connection: Connection, local_occurrence_id: int) -> tup
         .join(history.occurrences, history.verifications.c.occurrence_id == history.occurrences.c.id)
         .where(history.copies.c.local_occurrence_id == local_occurrence_id).order_by(history.verifications.c.id)
     ).mappings())
+
+
+def load_archive_locations(connection: Connection, volume_id: int, content_id: int) -> tuple[str, ...]:
+    """List observed or verified paths for these bytes on the current filesystem episode."""
+    occurrence = history.occurrences
+    observed = select(history.observations.c.id).where(
+        history.observations.c.occurrence_id == occurrence.c.id,
+        history.observations.c.present.is_(True),
+    ).exists()
+    verified = select(history.verifications.c.id).where(
+        history.verifications.c.occurrence_id == occurrence.c.id, history.verifications.c.result == "match",
+    ).exists()
+    query = (select(occurrence.c.path).filter_by(kind="archive", volume_id=volume_id, content_id=content_id)
+             .where(observed | verified).distinct().order_by(occurrence.c.path))
+    return tuple(connection.scalars(query))
+
+
+def find_content(connection: Connection, digest: str, size: int) -> RowMapping | None:
+    return find(connection, history.contents, sha256=digest, size=size)

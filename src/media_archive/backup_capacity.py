@@ -9,8 +9,9 @@ import unicodedata
 from media_archive._transfer_files import Destination
 from media_archive.config import Configuration
 from media_archive.devices import MountedVolume
+from media_archive.sort_conflicts import choose_name, require_destination_name
 from media_archive.sources import SourceDigest, hash_source_file
-from media_archive.state import StateError, history, open_database
+from media_archive.state import StateError, history, open_database, schema_version
 
 if TYPE_CHECKING:
     from media_archive.backup_planning import _Candidate
@@ -24,6 +25,7 @@ _ESTIMATED_HISTORY_PAGES_PER_CHECK = 16
 class RequiredPair:
     devices: frozenset[int]
     path: Path
+    pinned: tuple[tuple[int, Path], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -34,6 +36,7 @@ class BackupCopy:
     action: _CopyAction
     required_pair: RequiredPair
     digest: SourceDigest | None
+    elsewhere: tuple[str, ...] = ()
 
 
 @dataclass
@@ -50,6 +53,10 @@ class _Budget:
         return ((size + self.unit - 1) // self.unit) * self.unit
 
 
+def _path_key(path: Path) -> Path:
+    return Path(unicodedata.normalize("NFC", path.as_posix()).casefold())
+
+
 def check_backup_capacity(
     config: Configuration, candidates: tuple["_Candidate", ...],
     selected: dict[str, MountedVolume], source_disks: set[str], devices: dict[str, int], proposed_pair: frozenset[int],
@@ -59,6 +66,8 @@ def check_backup_capacity(
     if len(target_disks) != len(selected) or target_disks & source_disks:
         raise StateError("Cele BACKUP muszą leżeć na różnych fizycznych dyskach, osobnych od źródeł.")
     with open_database(config.app.database_file) as connection:
+        if schema_version(connection) < "0011":
+            raise StateError("BACKUP wymaga aktualnej bazy. Użyj migrate.")
         assignments = history.load_backup_assignments(connection, {item.file.collection_id for item in candidates})
         page_size = connection.exec_driver_sql("PRAGMA main.page_size").scalar_one()
         pages = connection.exec_driver_sql("PRAGMA main.page_count").scalar_one()
@@ -68,6 +77,8 @@ def check_backup_capacity(
         digest = SourceDigest(row.sha256, row.size)
         contents.setdefault(digest, set()).add(RequiredPair(
             frozenset((row.first_device_id, row.second_device_id)), Path(row.required_path),
+            tuple((device, Path(path)) for device, path in
+                  ((row.first_device_id, row.first_path), (row.second_device_id, row.second_path)) if path is not None),
         ))
 
     try:
@@ -91,6 +102,9 @@ def check_backup_capacity(
     months = set()
     outside_selected = 0
     missing_pair = False
+    assignments_to_check = []
+    reserved_paths: set[tuple[str, Path]] = set()
+    reserved_directories: set[tuple[str, Path]] = set()
     planned_paths: dict[tuple[str, Path], Path] = {}
     planned_directories: set[tuple[str, Path]] = set()
     for item in candidates:
@@ -116,12 +130,41 @@ def check_backup_capacity(
         aliases = [alias for alias in selected if devices[alias] in pair.devices]
         if not aliases:
             outside_selected += 1
+        assignments_to_check.append((item, pair, digest, aliases))
+        pinned_paths = dict(pair.pinned)
+        for alias in aliases:
+            normalized = _path_key(pinned_paths.get(devices[alias], pair.path))
+            reserved_paths.add((alias, normalized))
+            reserved_directories.update((alias, parent) for parent in normalized.parents)
+
+    def suffix_reserved(alias: str, path: Path) -> bool:
+        normalized = _path_key(path)
+        key = (alias, normalized)
+        return (key in reserved_paths or key in reserved_directories or key in planned_paths
+                or key in planned_directories)
+
+    for item, pair, digest, aliases in assignments_to_check:
+        file = item.file
+        pinned_paths = dict(pair.pinned)
         for alias in aliases:
             budget = budgets.get(alias)
             if budget is None:
                 continue
+            pinned = pinned_paths.get(devices[alias])
+            path = pinned or pair.path
             try:
-                normalized = Path(unicodedata.normalize("NFC", pair.path.as_posix()).casefold())
+                reused = False
+                if file.changes == "keep_both" and digest is None:
+                    digest = hash_source_file(item.source, item.entry.path, expected=item.entry)
+                if file.changes == "keep_both":
+                    assert digest is not None
+                    destination = Destination(budget.volume, path)
+                    if pinned is None:
+                        choice = choose_name(destination, digest, suffix_reserved=lambda name: suffix_reserved(alias, name))
+                        path, reused = choice.path, choice.reused
+                    else:
+                        require_destination_name(destination)
+                normalized = _path_key(path)
                 key = (alias, normalized)
                 parents = {(alias, parent) for parent in normalized.parents}
                 if key in planned_paths and planned_paths[key] != file.path:
@@ -130,16 +173,22 @@ def check_backup_capacity(
                     raise StateError("W partii ta sama ścieżka archiwalna jest wymagana jako plik i katalog.")
                 planned_paths[key] = file.path
                 planned_directories.update(parents)
-                destination = Destination(budget.volume, pair.path)
+                destination = Destination(budget.volume, path)
                 size = destination.file_size()
-                if size == file.size:
+                reused = reused and size == file.size
+                if not reused and size == file.size:
                     if digest is None:
                         digest = hash_source_file(item.source, item.entry.path, expected=item.entry)
-                    if destination.recover_digest(sync=False) == digest:
-                        budget.results["verified"] += 1
-                        copies.append(BackupCopy(file.path, alias, pair.path, "verified", pair, digest))
-                        continue
-                if size is None:
+                    reused = destination.recover_digest(sync=False) == digest
+                if reused:
+                    budget.results["verified"] += 1
+                    copies.append(BackupCopy(file.path, alias, path, "verified", pair, digest))
+                    continue
+                if file.changes == "keep_both" and pinned is not None and size is not None:
+                    raise StateError("Zapisana ścieżka kopii zawiera inną treść.")
+                if path != pair.path and pinned is None:
+                    action = "conflict"
+                elif size is None:
                     action = "copy"
                 elif file.changes == "replace_verified":
                     action = "replace"
@@ -148,11 +197,11 @@ def check_backup_capacity(
                 budget.transfer_parents.update(destination.preflight(allow_existing=True))
                 budget.media_bytes += budget.allocated(file.size)
                 budget.results[action] += 1
-                copies.append(BackupCopy(file.path, alias, pair.path, action, pair, digest))
+                copies.append(BackupCopy(file.path, alias, path, action, pair, digest))
                 if item.month is not None:
                     months.add(item.month)
             except (OSError, StateError) as error:
-                _issue(errors, pair.path, error, alias=alias)
+                _issue(errors, path, error, alias=alias)
 
     # Every future transfer and recorded check can add history rows before the generation is taken.
     database_bytes = page_size * (pages + _ESTIMATED_HISTORY_PAGES_PER_CHECK * len(copies))

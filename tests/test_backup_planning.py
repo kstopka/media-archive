@@ -2,18 +2,23 @@
 
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import replace
+from datetime import datetime, timezone
 from hashlib import sha256
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+import shutil
 from unittest.mock import patch
 
 from media_archive.backup_planning import plan_backup
+from media_archive.backup_append import execute_append
+from media_archive._transfer_files import Part
 from media_archive.cli import main
 from media_archive.config import ConfigError, load_config
 from media_archive.devices import VolumeUnavailable
-from media_archive.state import DeviceKey, StateError, history, open_database, transaction
+from media_archive.sources import LocalSource
+from media_archive.state import DeviceKey, StateError, history, journal, open_database, transaction
 from media_archive.state.registry import initialize_database, load_registered_devices, register_configuration
 from tests.config_fixtures import registry_values, write_config
 from tests.test_import_planning import mounted
@@ -281,3 +286,161 @@ class BackupPlanningTests(unittest.TestCase):
                 error, = plan.details["Błędy planowania"]
                 self.assertIn("plik i katalog", error["błąd"])
                 existing.unlink()
+
+    @contextmanager
+    def _backup_source(self, config, key, *, scope=None):
+        with self._verify_volume(config, key) as volume:
+            yield LocalSource(volume, scope)
+
+    def _append(self, alias="a", **options):
+        with (patch("media_archive.transfer.verify_volume", side_effect=self._verify_volume),
+              patch("media_archive.backup_append.open_local_source", side_effect=self._backup_source)):
+            return execute_append(self.config, profile_id="data", targets=(alias,), collection_id="photos", **options)
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_append_pins_different_names_and_reuses_verified_copies(self) -> None:
+        relative = "2025/2025.02/image.jpg"
+        source = self._file("photos_main", relative, b"new content")
+        self._archive_file("data", "a", "photos_main", relative, b"old content")
+        group = self.config.archive_group("data")
+        first = self._append()
+        self.assertEqual(first.code, 0, first.details)
+        a, = first.copies
+        self.assertEqual(a.action, "conflict")
+        self.assertIn(sha256(b"new content").hexdigest()[:8], a.archive_path.name)
+        self.assertEqual((group.target("a").mount / a.archive_path).read_bytes(), b"new content")
+        self.assertEqual((group.target("a").mount / a.required_pair.path).read_bytes(), b"old content")
+
+        self.connected.add(("data", "b"))
+        second = self._append("b")
+        self.assertEqual(second.code, 0, second.details)
+        b, = second.copies
+        self.assertEqual(b.archive_path, b.required_pair.path)
+        self.assertEqual((group.target("b").mount / b.archive_path).read_bytes(), b"new content")
+        self.assertEqual(source.read_bytes(), b"new content")
+        with patch.object(Part, "rsync_from", side_effect=AssertionError("zgodna kopia nie wymaga transferu")):
+            self.assertEqual(self._append().code, 0)
+            self.assertEqual(self._append("b").code, 0)
+        with open_database(self.database) as connection:
+            location, = history.load_occurrences(connection, "local", str(source))
+            self.assertEqual({item.path for item in history.load_archive_paths(connection, location.id)},
+                             {a.archive_path.as_posix(), b.archive_path.as_posix()})
+            self.assertEqual(len(history.load_archive_copies(connection, location.id)), 2)
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_append_requires_approval_to_copy_when_history_has_another_path(self) -> None:
+        relative = "2025/2025.02/image.jpg"
+        self._file("photos_main", relative, b"known")
+        self._archive_file("data", "a", "photos_main", "previous/image.jpg", b"known")
+        group = self.config.archive_group("data")
+        root = Path(group.root_relative) / self.config.collection("photos_main").archive_relative
+        old = root / "previous/image.jpg"
+        target = root / relative
+        episode = next(item.volume_id for item in load_registered_devices(self.database)
+                       if item.key == DeviceKey("archive", "a", "data"))
+        with open_database(self.database, writable=True) as connection, transaction(connection):
+            content = history.record_content(connection, sha256(b"known").hexdigest(), 5)
+            occurrence = history.record_occurrence(connection, "archive", old.as_posix(), content_id=content,
+                                                   volume_id=episode)
+            run = history.create_run(connection)
+            history.record_observation(connection, occurrence, run, observed_at=datetime.now(timezone.utc), present=True)
+        before = self.database.read_bytes()
+        plan = self._append()
+        self.assertEqual(plan.code, 3, plan.details)
+        self.assertEqual(plan.copies[0].elsewhere, (old.as_posix(),))
+        self.assertEqual(self.database.read_bytes(), before)
+        self.assertFalse((group.target("a").mount / target).exists())
+        self.assertEqual(self._append(copy_if_elsewhere=True).code, 0)
+        self.assertEqual((group.target("a").mount / old).read_bytes(), b"known")
+        self.assertEqual((group.target("a").mount / target).read_bytes(), b"known")
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_append_recovers_published_file_before_committing_its_evidence(self) -> None:
+        source = self._file("photos_main", "2025/2025.02/image.jpg", b"new")
+        original = Part.publish
+
+        def publish_then_interrupt(part, *args, **kwargs):
+            original(part, *args, **kwargs)
+            raise KeyboardInterrupt
+
+        with patch.object(Part, "publish", publish_then_interrupt):
+            interrupted = self._append()
+        self.assertEqual(interrupted.code, 130, interrupted.details)
+        with patch.object(Part, "rsync_from", side_effect=AssertionError("plik jest już opublikowany")):
+            resumed = self._append()
+        self.assertEqual(resumed.code, 0, resumed.details)
+        with open_database(self.database) as connection:
+            location, = history.load_occurrences(connection, "local", str(source))
+            evidence, = history.load_archive_copies(connection, location.id)
+            self.assertEqual(evidence.result, "match")
+
+    def test_append_does_not_copy_a_verified_file_which_disappears_after_preflight(self) -> None:
+        relative = "2025/2025.02/image.jpg"
+        self._file("photos_main", relative)
+        self._archive_file("data", "a", "photos_main", relative)
+        group = self.config.archive_group("data")
+        archive = group.target("a").mount / group.root_relative / self.config.collection("photos_main").archive_relative
+
+        def plan_then_remove(*args, **kwargs):
+            plan = plan_backup(*args, **kwargs)
+            self.assertEqual(plan.copies[0].action, "verified")
+            (archive / relative).unlink()
+            return plan
+
+        with (patch("media_archive.backup_append.plan_backup", side_effect=plan_then_remove),
+              patch.object(Part, "create", side_effect=AssertionError("transfer was not budgeted"))):
+            result = self._append()
+        self.assertEqual(result.code, 3)
+        self.assertIn("Odśwież plan", result.details["Wyniki BACKUP"][0]["błąd"])
+        self.assertFalse((archive / relative).exists())
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_append_finishes_latest_operation_after_interrupted_recreation(self) -> None:
+        source = self._file("photos_main", "2025/2025.02/image.jpg", b"new")
+        first = self._append()
+        self.assertEqual(first.code, 0, first.details)
+        previous = first.details["Wyniki BACKUP"][0]["operacja"]
+        mount = self.config.archive_group("data").target("a").mount
+        published = mount / first.copies[0].archive_path
+        published.unlink()
+        original_publish = Part.publish
+
+        def publish_then_interrupt(part, *args, **kwargs):
+            original_publish(part, *args, **kwargs)
+            raise KeyboardInterrupt
+
+        with patch.object(Part, "publish", publish_then_interrupt):
+            self.assertEqual(self._append().code, 130)
+        with open_database(self.database) as connection:
+            pending, = journal.load_unfinished(connection)
+        self.assertNotEqual(pending.id, previous)
+        with patch.object(Part, "rsync_from", side_effect=AssertionError("plik jest już opublikowany")):
+            for _ in range(2):
+                resumed = self._append()
+                self.assertEqual(resumed.code, 0, resumed.details)
+                self.assertEqual(resumed.details["Wyniki BACKUP"][0]["operacja"], pending.id)
+        with open_database(self.database) as connection:
+            self.assertEqual(journal.load_unfinished(connection), ())
+            location, = history.load_occurrences(connection, "local", str(source))
+            self.assertEqual(len(history.load_archive_copies(connection, location.id)), 2)
+        self.assertEqual(published.read_bytes(), b"new")
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_append_extends_suffix_reserved_by_another_file_in_the_batch(self) -> None:
+        folder = Path("2025/2025.02")
+        content = b"new"
+        digest = sha256(content).hexdigest()
+        relative = folder / "image.jpg"
+        short_name = folder / f"IMAGE-{digest[:8]}.JPG"
+        source = self._file("photos_main", relative, content)
+        separate = self._file("photos_main", short_name, b"other")
+        self._archive_file("data", "a", "photos_main", relative, b"old")
+        result = self._append()
+        self.assertEqual(result.code, 0, result.details)
+        copies = {copy.source: copy for copy in result.copies}
+        mount = self.config.archive_group("data").target("a").mount
+        self.assertEqual(copies[source].archive_path.name, f"image-{digest[:12]}.jpg")
+        self.assertEqual(copies[separate].archive_path.name, short_name.name)
+        self.assertEqual((mount / copies[source].required_pair.path).read_bytes(), b"old")
+        self.assertEqual((mount / copies[source].archive_path).read_bytes(), content)
+        self.assertEqual((mount / copies[separate].archive_path).read_bytes(), b"other")

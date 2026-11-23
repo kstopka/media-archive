@@ -42,7 +42,7 @@ class SnapshotTests(unittest.TestCase):
         with open_database(self.database, writable=True) as connection, transaction(connection):
             uncommitted = create_run(connection)
             generation = create_snapshot(self.config, self.output)
-        self.assertEqual(validate_snapshot(generation).revision, "0010")
+        self.assertEqual(validate_snapshot(generation).revision, "0011")
         self.assertEqual((generation / "settings.env").read_bytes(), self.settings.read_bytes())
         with open_database(generation / "state.sqlite3") as connection:
             runs = connection.exec_driver_sql("SELECT id FROM history_runs").scalars().all()
@@ -136,7 +136,7 @@ class SnapshotTests(unittest.TestCase):
     def test_restore_upgrades_a_staged_copy_of_an_earlier_revision(self) -> None:
         revisions = self.root / "older-revisions"
         shutil.copytree(migrations._SCRIPT_LOCATION, revisions, ignore=shutil.ignore_patterns(
-            "r0005_restore.py", "r0006_volume_hardware.py", "r0007_full_audit.py", "r0008_sort_dates.py", "r0009_sort_execution.py", "r0010_catalog.py", "__pycache__",
+            "r0005_restore.py", "r0006_volume_hardware.py", "r0007_full_audit.py", "r0008_sort_dates.py", "r0009_sort_execution.py", "r0010_catalog.py", "r0011_archive_paths.py", "__pycache__",
         ))
         self.database.unlink()
         with patch.object(migrations, "_SCRIPT_LOCATION", revisions):
@@ -147,7 +147,7 @@ class SnapshotTests(unittest.TestCase):
         restore_snapshot(self.config, generation)
         self.assertEqual({path.name: path.read_bytes() for path in generation.iterdir()}, before)
         with open_database(self.database) as connection:
-            self.assertEqual(schema_version(connection), "0010")
+            self.assertEqual(schema_version(connection), "0011")
             self.assertIsNotNone(load_reconciliation(connection))
 
     def test_restore_is_excluded_while_connection_or_operation_is_open(self) -> None:

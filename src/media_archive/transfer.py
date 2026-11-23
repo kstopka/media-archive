@@ -107,7 +107,7 @@ def execute_transfer(config: Configuration, operation_id: int, *, open_source: S
                      record_result: ResultWriter, progress: Callable[[int, int], None] | None = None,
                      cancelled: Callable[[], bool] | None = None,
                      locks: OperationLocks | None = None, source_occurrence_id: int | None = None,
-                     sort_copy: bool = False) -> TransferResult:
+                     sort_copy: bool = False, verify_existing_only: bool = False) -> TransferResult:
     """Acquire the planned locks, publish without overwriting, and commit the verified result."""
     database = config.app.database_file
     check_application_paths(config)
@@ -134,12 +134,14 @@ def execute_transfer(config: Configuration, operation_id: int, *, open_source: S
                         raise StateError("Źródło próby nie odpowiada treści zaplanowanego celu.")
             expected = SourceDigest(content.sha256, content.size)
             recovery = journal.recommended_recovery(attempts[-1] if attempts else None)
+            archive_copy = target.kind == "archive"
+            check_destination = sort_copy or archive_copy
 
             def start(mode):
                 with transaction(connection):
                     run = history.create_run(connection)
                     attempt_id = journal.start_attempt(connection, locks, operation_id, run, recovery=mode,
-                                                       check_destination=sort_copy)
+                                                       check_destination=check_destination)
                 return run, attempt_id
 
             run_id, attempt = start(recovery)
@@ -166,7 +168,7 @@ def execute_transfer(config: Configuration, operation_id: int, *, open_source: S
                                                         observed_at=datetime.now(timezone.utc), present=False)
                     journal.restart_after_missing_destination(connection, locks, attempt, absent)
 
-            at_risk = recovery == "reconcile" or sort_copy
+            at_risk = recovery == "reconcile" or check_destination
 
             def verify_link(destination: Destination, digest: SourceDigest) -> int:
                 nonlocal at_risk
@@ -183,7 +185,7 @@ def execute_transfer(config: Configuration, operation_id: int, *, open_source: S
                 with verify_volume(config, key, writable=True) as volume:
                     destination = Destination(volume, path)
                     proof = None
-                    if sort_copy:
+                    if check_destination:
                         require_destination_name(destination)
                     if at_risk:
                         found = destination.recover_digest()
@@ -192,14 +194,18 @@ def execute_transfer(config: Configuration, operation_id: int, *, open_source: S
                                 raise TransferConflict("Zastany cel ma inną treść. Pozostawiono go bez zmian.")
                             proof = verify(found)
                         else:
+                            if verify_existing_only:
+                                raise StateError("Zgodna kopia zniknęła po podglądzie. Odśwież plan pojemności.")
                             confirm_absence(destination)
                             at_risk = False
                     if proof is None:
-                        if target.kind == "staging":
+                        if target.kind == "staging" or archive_copy:
                             available, unit = destination.space()
                             parents = destination.preflight()
                             blocks = (expected.size + unit - 1) // unit + len(parents) + 1
                             if available < blocks * unit + config.app.min_free_bytes:
+                                if archive_copy:
+                                    raise StateError("Za mało wolnego miejsca na kopię i wymaganą rezerwę BACKUP.")
                                 raise StateError("Za mało wolnego miejsca na kopię i wymaganą rezerwę stagingu.")
                         else:
                             destination.ensure_absent()
@@ -246,7 +252,7 @@ def execute_transfer(config: Configuration, operation_id: int, *, open_source: S
                                 raise ReadCancelled("Anulowano transfer.")
                             proof = verify(copy)
                             at_risk = True
-                            if sort_copy:
+                            if check_destination:
                                 require_destination_name(destination)
                                 part.publish(destination, status, allow_link_fallback=False)
                             else:

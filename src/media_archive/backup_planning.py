@@ -3,7 +3,7 @@
 from collections import Counter
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path, PurePosixPath
 import stat
@@ -344,6 +344,28 @@ def _plan_scope(config: Configuration, stack: ExitStack, profile: BackupProfile,
     copies, pending_months, capacity, outside_selected = check_backup_capacity(
         config, candidates, selected, source_disks, devices, proposed_pair, errors,
     )
+    locations = []
+    annotated = []
+    owners = {item.file.path: item.file.collection_id for item in candidates}
+    with open_database(config.app.database_file) as connection:
+        for copy in copies:
+            if _archive_owner(copy.archive_path, reserved) != owners[copy.source]:
+                _issue(errors, copy.archive_path, StateError("Planowana kopia koliduje z zarezerwowanym celem."),
+                       alias=copy.target)
+            if copy.action == "verified" or copy.digest is None:
+                annotated.append(copy)
+                continue
+            content = history.find_content(connection, copy.digest.sha256, copy.digest.size)
+            episode = bindings[DeviceKey("archive", copy.target, group.id)].volume_id
+            other = () if content is None else tuple(path for path in history.load_archive_locations(
+                connection, episode, content.id,
+            ) if path != copy.archive_path.as_posix())
+            annotated.append(replace(copy, elsewhere=other))
+            if other:
+                locations.append({"źródło": str(copy.source), "cel": copy.target, "zapisane ścieżki": list(other)})
+    copies = tuple(annotated)
+    if locations:
+        details["Historyczne kopie pod inną ścieżką"] = locations
     if layouts and (collection_id is not None or first is not None):
         months = sorted(pending_months, reverse=True)
         details["Miesiące z transferami"] = months

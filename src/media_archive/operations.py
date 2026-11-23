@@ -152,6 +152,8 @@ def pending(config: Configuration, operation_id: int | None = None) -> dict[str,
                 recovery = recommended_recovery(last)
                 if reconciliation_required:
                     step = reconcile_first
+                elif operation.operation_key.startswith("backup:"):
+                    step = "Ponów backup --append-test z tym samym zakresem i celami, aby odświeżyć plan pojemności."
                 elif operation.id in cleanup:
                     step = "Zweryfikuj gotową kopię i dokończ usuwanie kopii roboczej przez resume."
                 elif recovery == "restart":

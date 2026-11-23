@@ -8,6 +8,7 @@ import sys
 
 from media_archive import operations
 from media_archive.audit import quick_audit
+from media_archive.backup_append import execute_append, is_append_operation
 from media_archive.backup_planning import plan_backup
 from media_archive.camera_import import import_camera
 from media_archive.catalog import keep_both, list_conflicts, record_manual_move, search_catalog
@@ -188,7 +189,11 @@ def _parser() -> argparse.ArgumentParser:
     move.add_argument("occurrence_id", type=_operation_id, metavar="ID_LOKALIZACJI")
     move.add_argument("target", type=Path, metavar="NOWA_ŚCIEŻKA")
     backup = commands.add_parser("backup", help="pokaż profil, zakres i polityki BACKUP")
-    backup.add_argument("--dry-run", action="store_true", required=True, help="tylko odczyt i podgląd zakresu")
+    backup_mode = backup.add_mutually_exclusive_group(required=True)
+    backup_mode.add_argument("--dry-run", action="store_true", help="tylko odczyt i podgląd zakresu")
+    backup_mode.add_argument("--append-test", action="store_true", help="wykonaj próbę dopisywania w konfiguracji testowej")
+    backup.add_argument("--copy-if-elsewhere", action="store_true",
+                        help="zatwierdź nową kopię mimo zapisanej kopii pod inną ścieżką")
     backup.add_argument("--profile", metavar="PROFIL")
     backup.add_argument("--targets", nargs="+", metavar="CEL")
     backup.add_argument("--pair", nargs=2, metavar=("PIERWSZY", "DRUGI"),
@@ -222,6 +227,11 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         parser.error("Użyj setup --dry-run, aby zobaczyć plan, albo setup --yes, aby go wykonać.")
     if args.command == "restore" and (args.config is None or not args.yes):
         parser.error("Użyj --config PLIK restore GENERACJA --yes.")
+    if args.command == "backup":
+        if args.append_test and (args.config is None or args.profile is None or not args.targets):
+            parser.error("Próba zapisu wymaga --config PLIK backup --append-test --profile PROFIL --targets CEL.")
+        if args.copy_if_elsewhere and not args.append_test:
+            parser.error("--copy-if-elsewhere wymaga --append-test.")
     if args.command in ("import", "resume") and (args.card is None) != (args.mount is None):
         parser.error("Import z karty wymaga jednocześnie --card i --mount.")
     if args.command == "audit":
@@ -253,7 +263,7 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if args.command == "device":
         dry_run = args.device_action != "check" and not getattr(args, "yes", False)
     save_report = getattr(args, "report", False) or (
-        args.command in ("setup", "migrate", "audit", "inventory", "init-phone", "import", "resume", "reconcile", "sort")
+        args.command in ("setup", "migrate", "audit", "inventory", "init-phone", "import", "resume", "reconcile", "sort", "backup")
         and not dry_run
     )
     try:
@@ -336,6 +346,8 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                 if args.card is not None:
                     raise ConfigError("Wznowienie SORT korzysta z lokalnej kopii roboczej.")
                 code, message, details = _sort_result((resume_sort(config, args.operation_id),))
+            elif is_append_operation(config, args.operation_id):
+                raise StateError("Ponów backup --append-test z tym samym zakresem i celami, aby odświeżyć plan pojemności.")
             else:
                 code, message, details = resume_import(config, args.operation_id, card=args.card, mount=args.mount)
         elif args.command == "sort":
@@ -368,9 +380,13 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             details = {"Poprzednie ID lokalizacji": args.occurrence_id, "Nowe ID lokalizacji": current}
             message = "Zapisano zweryfikowaną zmianę lokalizacji."
         elif args.command == "backup":
-            outcome = plan_backup(config, profile_id=args.profile, collection_id=args.collection,
-                                  month=args.month, targets=tuple(args.targets or ()), pair=tuple(args.pair or ()),
-                                  announce=lambda message: print(message, file=sys.stderr, flush=True))
+            selection = dict(profile_id=args.profile, collection_id=args.collection, month=args.month,
+                             targets=tuple(args.targets or ()), pair=tuple(args.pair or ()))
+            if args.append_test:
+                outcome = execute_append(config, **selection, copy_if_elsewhere=args.copy_if_elsewhere)
+            else:
+                outcome = plan_backup(config, **selection,
+                                      announce=lambda message: print(message, file=sys.stderr, flush=True))
             code, message, details = outcome.code, outcome.message, outcome.details
         elif args.command == "reconcile":
             try:

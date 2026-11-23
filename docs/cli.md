@@ -32,6 +32,7 @@ Use `media-archive` or `python -m media_archive`. Put `--config FILE` before the
 | `search [--name TEXT] [--month YYYY-MM] [--source TYPE:PROFILE]` | Search [saved media locations](catalog.md#search). |
 | `conflicts [--keep-both GROUP]` | List [SORT conflicts](catalog.md#review-decisions) or save a review decision. |
 | `catalog-move ID ABSOLUTE_PATH` | Verify an [existing manual move](catalog.md#reconcile-a-manual-move) and update the catalog. |
+| `backup --append-test --profile ID --targets ALIAS ...` | Run an [isolated append-only backup trial](backup-append.md) with an explicit configuration. |
 | `backup --dry-run [--profile ID] [--targets ALIAS ...] [--pair ALIAS ALIAS] [--collection ID] [--month YYYY-MM]` | Preview [BACKUP scope, policies and capacity](backup-planning.md). |
 
 All commands that need existing state report a missing database as an error. Setup and migration use the [SQLite lifecycle](state.md#first-setup-and-upgrades). The configuration wizard is a separate planned feature. Camera import uses the [journal](journal.md) and [history](history.md).

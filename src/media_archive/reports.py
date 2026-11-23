@@ -90,6 +90,15 @@ class Report:
                                  f" · snapshot {item['snapshot']} B")
                     lines.append(f"  Zgodne {item['zgodne']} · nowe {item['nowe']} · podmiany {item['podmiany']}"
                                  f" · warianty konfliktowe {item['warianty_konfliktowe']}")
+            elif key == "Historyczne kopie pod inną ścieżką":
+                lines.append(key)
+                for item in value:
+                    lines.append(f"- {item['źródło']} · cel {item['cel']}")
+                    lines.extend(f"  {path}" for path in item["zapisane ścieżki"])
+            elif key == "Wyniki BACKUP":
+                for item in value:
+                    status = item.get("wynik", item.get("błąd"))
+                    lines.append(f"- {item['cel']} · {item['ścieżka']} · {status}")
             elif key == "Błędy planowania":
                 lines.extend(f"- {item['ścieżka']} · {item['błąd']}"
                              + (f" · cel {item['cel']}" if "cel" in item else "") for item in value)

@@ -47,7 +47,7 @@ The SQLite foundation verification passed **122 tests on Python 3.14.4 with SQLi
 | [test_import_planning.py](../tests/test_import_planning.py) | Import planning, staging capacity, camera execution, explicit reimport and recovery after publication or restore |
 | [test_transfer.py](../tests/test_transfer.py) | Real temporary file publication, independent verification, retained parts and process exit around publication |
 | [test_sort_planning.py](../tests/test_sort_planning.py) | SORT preview and ExifTool metadata, manual dates, verified publication, name conflicts, interrupted cleanup and restore |
-| [test_backup_planning.py](../tests/test_backup_planning.py) | Synthetic archive mounts, profile selection, complete and monthly scopes, child policies, pair continuity, physical independence and per-target capacity |
+| [test_backup_planning.py](../tests/test_backup_planning.py) | Synthetic archive mounts, profile selection, complete and monthly scopes, child policies, pair continuity, physical independence, per-target capacity and append-only publication and recovery |
 | [test_catalog.py](../tests/test_catalog.py) | Search filters, offline inventory and read-only catalog inspection |
 | [test_state_snapshots.py](../tests/test_state_snapshots.py) | Active SQLite snapshots, integrity validation, exclusive restore and reconciliation |
 | [test_state_journal.py](../tests/test_state_journal.py) | Journal migration, contention between processes, recovery and atomic history commits |

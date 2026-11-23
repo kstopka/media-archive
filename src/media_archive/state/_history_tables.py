@@ -18,6 +18,7 @@ verifications = _table("verifications", "id", "occurrence_id", "run_id", "verifi
 imports = _table("imports", "id", "source_occurrence_id", "staging_occurrence_id", "verification_id")
 placements = _table("placements", "import_id", "local_occurrence_id", "verification_id")
 pairs = _table("archive_pairs", "local_occurrence_id", "first_device_id", "second_device_id", "required_path")
+archive_paths = _table("archive_paths", "local_occurrence_id", "device_id", "path")
 copies = _table("archive_copies", "verification_id", "local_occurrence_id")
 initializations = _table("initializations", "source_id", "policy", "boundary", "baseline_device_id",
                          "started_run_id", "completed_run_id")
