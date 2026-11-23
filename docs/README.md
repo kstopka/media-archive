@@ -28,6 +28,7 @@ Current coverage includes the package and CLI, configuration, SQLite lifecycle, 
 | [sort-planning.md](sort-planning.md) | Read capture dates, preview SORT paths and record a manual date |
 | [sort.md](sort.md) | Publish verified placements, preserve conflicts and recover interrupted moves |
 | [backup-append.md](backup-append.md) | Test append-only publication, disk-specific paths and recovery |
+| [backup-replacement.md](backup-replacement.md) | Test controlled replacement and recover interrupted publication |
 | [backup-planning.md](backup-planning.md) | Select a BACKUP profile and preview scope, targets and capacity |
 | [catalog.md](catalog.md) | Search saved locations, reconcile manual moves and review durable conflicts |
 | [cli.md](cli.md) | Setup, migrations, planning, journal previews and report retention |
@@ -87,7 +88,7 @@ These documents use neutral examples and do not depend on private planning notes
 | Phone import | Verified ADB import to staging, including completion of pending baseline processing |
 | SORT | Read-only preview, verified placement and cleanup, explicit date decisions and durable name conflicts |
 | Catalog | Search saved media locations, verify manual moves and review name conflicts |
-| BACKUP | Read-only [scope, target and capacity preview](backup-planning.md). Append-only transfer is available for isolated trials. Snapshot publication is planned. |
+| BACKUP | Read-only [scope, target and capacity preview](backup-planning.md). Isolated trials support [append-only transfer](backup-append.md) and [controlled replacement](backup-replacement.md). Snapshot publication is planned. |
 | Configuration wizard | Future enhancement; settings are currently edited in `.env` |
 
 The expected future pipeline is source → staging → SORT → local collection → manually invoked BACKUP. This explains existing configuration relationships; it is not an executable workflow yet. Future behavior must be marked as such throughout these documents.

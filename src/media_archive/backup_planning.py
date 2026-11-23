@@ -252,7 +252,7 @@ def _probe_targets(config: Configuration, stack: ExitStack, group_ids: set[str],
 
 def plan_backup(config: Configuration, *, profile_id: str | None = None, collection_id: str | None = None,
                 month: str | None = None, targets: tuple[str, ...] = (), pair: tuple[str, ...] = (),
-                announce: Callable[[str], None] = lambda _: None) -> BackupPlan:
+                announce: Callable[[str], None] = lambda _: None, prepare_replacements: bool = False) -> BackupPlan:
     """Select a registered profile and build a read-only candidate manifest."""
     check_application_paths(config)
     first = _month(month) if month is not None else None
@@ -286,12 +286,14 @@ def plan_backup(config: Configuration, *, profile_id: str | None = None, collect
         details["Wybrane cele"] = list(selected)
         if len(selected) > 2 or (targets and set(targets) != set(selected)):
             return BackupPlan(3, "Wybierz jeden albo dwa dostępne cele przez --profile i --targets.", details)
-        return _plan_scope(config, stack, profile, selected, collection_id, first, details, pair, announce)
+        return _plan_scope(config, stack, profile, selected, collection_id, first, details, pair, announce,
+                           prepare_replacements)
 
 
 def _plan_scope(config: Configuration, stack: ExitStack, profile: BackupProfile,
                 selected: dict[str, MountedVolume], collection_id: str | None, first: date | None,
-                details: dict[str, object], pair: tuple[str, ...], announce: Callable[[str], None]) -> BackupPlan:
+                details: dict[str, object], pair: tuple[str, ...], announce: Callable[[str], None],
+                prepare_replacements: bool) -> BackupPlan:
     roots = config.profile_collections(profile.id)
     details["Zakresy BACKUP"] = [{"zbiór": "Wszystko", "label": profile.label}, *(
         {"zbiór": item.id, "label": item.label, "miesiące": bool(config.month_collections(item.id))} for item in roots
@@ -343,6 +345,7 @@ def _plan_scope(config: Configuration, stack: ExitStack, profile: BackupProfile,
     announce("BACKUP · sprawdzanie kopii i miejsca na wybranych nośnikach")
     copies, pending_months, capacity, outside_selected = check_backup_capacity(
         config, candidates, selected, source_disks, devices, proposed_pair, errors,
+        prepare_replacements=prepare_replacements,
     )
     locations = []
     annotated = []

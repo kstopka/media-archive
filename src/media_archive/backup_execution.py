@@ -1,15 +1,19 @@
-"""Execute append-only backup previews against explicitly selected test targets."""
+"""Execute controlled BACKUP trials against explicitly selected test targets."""
 
+from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import replace
 from hashlib import sha256
 import json
+from pathlib import Path
+
+from sqlalchemy.engine import Connection
 
 from media_archive.backup_capacity import BackupCopy
 from media_archive.backup_planning import BackupFile, BackupPlan, plan_backup
 from media_archive.config import Configuration
 from media_archive.devices import registered_volume
-from media_archive.sources import open_local_source
+from media_archive.sources import LocalSource, SourceDigest, open_local_source
 from media_archive.state import DeviceKey, StateError, history, journal, open_database, transaction
 from media_archive.state.locking import OperationLocks, Resource, collection_resource, lock_resources
 from media_archive.state.reconciliation import require_reconciled
@@ -26,6 +30,33 @@ def _run_copy(config: Configuration, group: str, file: BackupFile, copy: BackupC
     if expected is None or source.volume_id is None or target.volume_id is None or target.device_id is None:
         raise StateError("Próba BACKUP wymaga znanej treści i zarejestrowanych woluminów.")
     database = config.app.database_file
+    replacement = file.changes == "replace_verified"
+    scope = config.collection(file.collection_id).local_root
+
+    @contextmanager
+    def open_source() -> Generator[tuple[LocalSource, Path], None, None]:
+        with open_local_source(config, local_key, scope=scope) as reader:
+            yield reader, file.path.relative_to(scope)
+
+    def finish(operation_id: int, local_id: int, *, verify_existing_only: bool) -> None:
+        def record_result(connection: Connection, verification: int) -> None:
+            history.record_archive_copy(connection, local_id, verification, update_presence=replacement)
+
+        execute_transfer(config, operation_id, locks=locks, open_source=open_source, record_result=record_result,
+                         verify_existing_only=verify_existing_only)
+
+    if replacement:
+        with open_database(database) as connection:
+            pending = journal.load_pending_replacements(connection, target.volume_id, copy.archive_path.as_posix())
+        observed = expected if copy.action == "verified" else copy.previous
+        for earlier in pending:
+            earlier_digest = SourceDigest(earlier.sha256, earlier.size)
+            if earlier_digest == expected:
+                continue  # The same intent is resumed below.
+            if earlier_digest != observed:
+                raise StateError(f"Podmianę blokuje niedokończona operacja BACKUP {earlier.id}. Sprawdź cel i zamiar operacji.")
+            finish(earlier.id, json.loads(earlier.intent)["local_id"], verify_existing_only=True)
+
     with open_database(database, writable=True) as connection, transaction(connection):
         require_reconciled(connection)
         content = history.record_content(connection, expected.sha256, expected.size)
@@ -41,45 +72,38 @@ def _run_copy(config: Configuration, group: str, file: BackupFile, copy: BackupC
         history.assign_archive_pair(connection, local_id, first, second, copy.required_pair.path.as_posix())
         history.pin_archive_path(connection, local_id, target.device_id, copy.archive_path.as_posix())
 
-        intent = json.dumps({"kind": "backup_append", "local_id": local_id}, ensure_ascii=False)
+        prefix = journal.BACKUP_REPLACE_PREFIX if replacement else "backup:"
+        intent: dict[str, object] = {"kind": "backup_replace" if replacement else "backup_append", "local_id": local_id}
+        if replacement:
+            intent["previous"] = [copy.previous.sha256, copy.previous.size] if copy.previous is not None else None
         identity = json.dumps((local_id, target.volume_id, copy.archive_path.as_posix()))
-        token = "backup:" + sha256(identity.encode("utf-8")).hexdigest()
+        token = prefix + sha256(identity.encode("utf-8")).hexdigest()
         operation = journal.find_operation(connection, token)
         while operation is not None:
             attempts = journal.load_attempts(connection, operation.id)
             if not attempts or attempts[-1].state != "committed":
                 break
-            token = f"backup:{operation.id}"
+            token = f"{prefix}{operation.id}"
             successor = journal.find_operation(connection, token)
             if successor is None and copy.action == "verified":
-                return operation.id
+                if not replacement or history.archive_copy_last_seen_present(connection, operation.target_occurrence_id):
+                    return operation.id
             operation = successor
         if operation is None:
             occurrence = history.record_occurrence(connection, "archive", copy.archive_path.as_posix(),
                                                    content_id=content, volume_id=target.volume_id)
-            operation_id = journal.plan_operation(connection, locks, config, operation_key=token, intent=intent,
+            operation_id = journal.plan_operation(connection, locks, config, operation_key=token, intent=json.dumps(intent),
                                                   target_occurrence_id=occurrence, required_resources=resources)
         else:
             operation_id = operation.id
 
-    scope = config.collection(file.collection_id).local_root
-
-    @contextmanager
-    def open_source():
-        with open_local_source(config, local_key, scope=scope) as reader:
-            yield reader, file.path.relative_to(scope)
-
-    execute_transfer(config, operation_id, locks=locks, open_source=open_source,
-                     verify_existing_only=copy.action == "verified",
-                     record_result=lambda connection, verification: history.record_archive_copy(
-                         connection, local_id, verification,
-                     ))
+    finish(operation_id, local_id, verify_existing_only=copy.action == "verified")
     return operation_id
 
 
-def execute_append(config: Configuration, *, profile_id: str, targets: tuple[str, ...],
-                   collection_id: str | None = None, month: str | None = None, pair: tuple[str, ...] = (),
-                   copy_if_elsewhere: bool = False) -> BackupPlan:
+def execute_backup_trial(config: Configuration, *, profile_id: str, targets: tuple[str, ...],
+                         collection_id: str | None = None, month: str | None = None, pair: tuple[str, ...] = (),
+                         copy_if_elsewhere: bool = False, replace_test: bool = False) -> BackupPlan:
     if not profile_id or not targets:
         raise StateError("Próba BACKUP wymaga jawnego profilu i celów.")
     try:
@@ -94,10 +118,11 @@ def execute_append(config: Configuration, *, profile_id: str, targets: tuple[str
         with open_database(config.app.database_file) as connection:
             require_reconciled(connection)
         plan = plan_backup(config, profile_id=profile_id, collection_id=collection_id, month=month,
-                           targets=targets, pair=pair)
+                           targets=targets, pair=pair, prepare_replacements=replace_test)
         if plan.code:
             return plan
-        files = {file.path: file for file in plan.files if file.changes == "keep_both"}
+        policy = "replace_verified" if replace_test else "keep_both"
+        files = {file.path: file for file in plan.files if file.changes == policy}
         candidates = [copy for copy in plan.copies if copy.source in files]
         if not copy_if_elsewhere and any(copy.elsewhere for copy in candidates):
             return replace(plan, code=3, message=(
@@ -116,13 +141,16 @@ def execute_append(config: Configuration, *, profile_id: str, targets: tuple[str
             except KeyboardInterrupt:
                 return replace(plan, code=130, message="Przerwano próbę BACKUP.",
                                details={**plan.details, "Wyniki BACKUP": results})
-            result["wynik"] = "zgodna" if copy.action == "verified" else "skopiowano"
+            result["wynik"] = {"verified": "zgodna", "replace": "zastąpiono"}.get(copy.action, "skopiowano")
             results.append(result)
-        return replace(plan, message="Zakończono próbę BACKUP dla zbiorów dopisywanych.",
-                       details={**plan.details, "Wyniki BACKUP": results,
-                                "Pliki z polityką zastępowania poza próbą": len(plan.files) - len(files)})
+        message = ("Zakończono próbę kontrolowanego zastępowania BACKUP." if replace_test
+                   else "Zakończono próbę BACKUP dla zbiorów dopisywanych.")
+        skipped = ("Pliki z polityką dopisywania poza próbą" if replace_test
+                   else "Pliki z polityką zastępowania poza próbą")
+        return replace(plan, message=message,
+                       details={**plan.details, "Wyniki BACKUP": results, skipped: len(plan.files) - len(files)})
 
 
-def is_append_operation(config: Configuration, operation_id: int) -> bool:
+def backup_retry_command(config: Configuration, operation_id: int) -> str | None:
     with open_database(config.app.database_file) as connection:
-        return journal.load_operation(connection, operation_id).operation_key.startswith("backup:")
+        return journal.backup_retry_command(journal.load_operation(connection, operation_id))

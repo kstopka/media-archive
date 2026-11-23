@@ -2,6 +2,7 @@
 
 from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 import re
 from typing import Literal
@@ -40,6 +41,15 @@ _NEXT = {
 _ACTIVE = (*_NEXT, "published")
 _STOPPED = ("interrupted", "failed", "conflict", "needs_review")
 _REGISTRIES = {"archive": registry.archive_groups, "source": registry.sources}
+BACKUP_REPLACE_PREFIX = "backup:replace:"
+
+
+def backup_retry_command(operation: RowMapping) -> str | None:
+    if operation.operation_key.startswith(BACKUP_REPLACE_PREFIX):
+        return "backup --replace-test"
+    if operation.operation_key.startswith("backup:"):
+        return "backup --append-test"
+    return None
 
 
 def _may_have_published(attempt: RowMapping) -> bool:
@@ -256,12 +266,33 @@ def restart_after_missing_destination(
     if (observation.id <= attempt.observation_floor or observation.present or observation.run_id != attempt.run_id
             or observation.occurrence_id != operation.target_occurrence_id):
         raise StateError("Ponowny transfer wymaga świeżego potwierdzenia braku pliku docelowego.")
+    _restart_transfer(connection, attempt.id, observation_id=observation.id)
+
+
+def restart_before_replacement(
+    connection: Connection, locks: OperationLocks, attempt_id: int, verification_id: int,
+) -> None:
+    """Permit replacement after a fresh full read matches the immutable preimage."""
+    require_write_transaction(connection)
+    attempt = _owned_attempt(connection, locks, attempt_id)
+    operation = require_row(connection, operations, id=attempt.operation_id)
+    proof = require_row(connection, history.verifications, id=verification_id)
+    if (not operation.operation_key.startswith(BACKUP_REPLACE_PREFIX) or not attempt.reconciling
+            or attempt.state != "verifying" or proof.id <= attempt.verification_floor
+            or proof.run_id != attempt.run_id or proof.occurrence_id != operation.target_occurrence_id
+            or proof.result != "mismatch"
+            or json.loads(operation.intent).get("previous") != [proof.read_sha256, proof.bytes_read]):
+        raise StateError("Podmiana wymaga świeżego pełnego odczytu zgodnego z zapisaną starszą kopią.")
+    _restart_transfer(connection, attempt.id)
+
+
+def _restart_transfer(connection: Connection, attempt_id: int, *, observation_id: int | None = None) -> None:
     with connection.begin_nested():
-        connection.execute(attempts.update().filter_by(id=attempt.id).values(
+        connection.execute(attempts.update().filter_by(id=attempt_id).values(
             state="planned", reconciling=False,
             verification_floor=connection.scalar(select(func.max(history.verifications.c.id))) or 0,
         ))
-        _event(connection, attempt.id, "planned", observation_id=observation.id)
+        _event(connection, attempt_id, "planned", observation_id=observation_id)
 
 
 def stop_attempt(
@@ -331,3 +362,17 @@ def load_unfinished(connection: Connection) -> tuple[RowMapping, ...]:
     return tuple(connection.execute(operations.select().where(~operations.c.id.in_(
         attempts.select().with_only_columns(attempts.c.operation_id).filter_by(state="committed")
     )).order_by(operations.c.id)).mappings())
+
+
+def load_pending_replacements(connection: Connection, volume_id: int, path: str) -> tuple[RowMapping, ...]:
+    """Find unfinished replacement intents for one physical archive location."""
+    target = history.occurrences
+    query = (select(*operations.c, history.contents.c.sha256, history.contents.c.size)
+             .join_from(operations, target, operations.c.target_occurrence_id == target.c.id)
+             .join(history.contents, history.contents.c.id == target.c.content_id)
+             .where(target.c.kind == "archive", target.c.volume_id == volume_id, target.c.path == path,
+                    operations.c.operation_key.startswith(BACKUP_REPLACE_PREFIX),
+                    ~select(attempts.c.id).where(attempts.c.operation_id == operations.c.id,
+                                                attempts.c.state == "committed").exists())
+             .order_by(operations.c.id))
+    return tuple(connection.execute(query).mappings())

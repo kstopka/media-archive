@@ -4,6 +4,7 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import json
 import os
 from pathlib import Path
 import stat
@@ -108,7 +109,7 @@ def execute_transfer(config: Configuration, operation_id: int, *, open_source: S
                      cancelled: Callable[[], bool] | None = None,
                      locks: OperationLocks | None = None, source_occurrence_id: int | None = None,
                      sort_copy: bool = False, verify_existing_only: bool = False) -> TransferResult:
-    """Acquire the planned locks, publish without overwriting, and commit the verified result."""
+    """Acquire the planned locks, publish a verified copy and commit its result."""
     database = config.app.database_file
     check_application_paths(config)
     with installation_lock(database):
@@ -128,6 +129,15 @@ def execute_transfer(config: Configuration, operation_id: int, *, open_source: S
                 return TransferResult(attempts[-1].id, attempts[-1].verification_id)
             with connection.begin():
                 key, path = _destination(connection, config, target, resources)
+                previous = None
+                if operation.operation_key.startswith(journal.BACKUP_REPLACE_PREFIX):
+                    intent = json.loads(operation.intent)
+                    local = history.load_occurrence(connection, intent["local_id"])
+                    if (target.kind != "archive" or local.kind != "local" or local.content_id != target.content_id
+                            or config.policy_for_path(local.collection_id, Path(local.path)).changes != "replace_verified"):
+                        raise StateError("Bieżąca polityka zbioru nie dopuszcza zaplanowanej podmiany.")
+                    if intent["previous"] is not None:
+                        previous = SourceDigest(*intent["previous"])
                 if source_occurrence_id is not None:
                     origin = history.load_occurrence(connection, source_occurrence_id)
                     if origin.kind != "source" or origin.content_id != target.content_id:
@@ -168,6 +178,14 @@ def execute_transfer(config: Configuration, operation_id: int, *, open_source: S
                                                         observed_at=datetime.now(timezone.utc), present=False)
                     journal.restart_after_missing_destination(connection, locks, attempt, absent)
 
+            def confirm_previous(digest: SourceDigest) -> None:
+                with transaction(connection):
+                    proof = history.record_verification(
+                        connection, target.id, run_id, verified_at=datetime.now(timezone.utc),
+                        scope="full", read_sha256=digest.sha256, bytes_read=digest.size,
+                    )
+                    journal.restart_before_replacement(connection, locks, attempt, proof)
+
             at_risk = recovery == "reconcile" or check_destination
 
             def verify_link(destination: Destination, digest: SourceDigest) -> int:
@@ -189,19 +207,22 @@ def execute_transfer(config: Configuration, operation_id: int, *, open_source: S
                         require_destination_name(destination)
                     if at_risk:
                         found = destination.recover_digest()
-                        if found is not None:
-                            if found != expected:
-                                raise TransferConflict("Zastany cel ma inną treść. Pozostawiono go bez zmian.")
+                        if found == expected:
                             proof = verify(found)
                         else:
                             if verify_existing_only:
-                                raise StateError("Zgodna kopia zniknęła po podglądzie. Odśwież plan pojemności.")
-                            confirm_absence(destination)
+                                raise StateError("Zgodna kopia zniknęła lub zmieniła się po podglądzie. Odśwież plan pojemności.")
+                            if found != previous:
+                                raise TransferConflict("Zastany cel różni się od zapisanego zamiaru. Pozostawiono go bez zmian.")
+                            if found is None:
+                                confirm_absence(destination)
+                            else:
+                                confirm_previous(found)
                             at_risk = False
                     if proof is None:
                         if target.kind == "staging" or archive_copy:
                             available, unit = destination.space()
-                            parents = destination.preflight()
+                            parents = destination.preflight(allow_existing=previous is not None)
                             blocks = (expected.size + unit - 1) // unit + len(parents) + 1
                             if available < blocks * unit + config.app.min_free_bytes:
                                 if archive_copy:
@@ -254,7 +275,7 @@ def execute_transfer(config: Configuration, operation_id: int, *, open_source: S
                             at_risk = True
                             if check_destination:
                                 require_destination_name(destination)
-                                part.publish(destination, status, allow_link_fallback=False)
+                                part.publish(destination, status, allow_link_fallback=False, previous=previous)
                             else:
                                 part.publish(destination, status)
                     advance("published")

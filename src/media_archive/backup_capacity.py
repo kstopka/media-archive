@@ -37,6 +37,7 @@ class BackupCopy:
     required_pair: RequiredPair
     digest: SourceDigest | None
     elsewhere: tuple[str, ...] = ()
+    previous: SourceDigest | None = None
 
 
 @dataclass
@@ -60,7 +61,7 @@ def _path_key(path: Path) -> Path:
 def check_backup_capacity(
     config: Configuration, candidates: tuple["_Candidate", ...],
     selected: dict[str, MountedVolume], source_disks: set[str], devices: dict[str, int], proposed_pair: frozenset[int],
-    errors: list[dict[str, str]],
+    errors: list[dict[str, str]], *, prepare_replacements: bool = False,
 ) -> tuple[tuple[BackupCopy, ...], set[str], list[dict[str, object]], int]:
     target_disks = {volume.physical_device for volume in selected.values()}
     if len(target_disks) != len(selected) or target_disks & source_disks:
@@ -154,7 +155,7 @@ def check_backup_capacity(
             path = pinned or pair.path
             try:
                 reused = False
-                if file.changes == "keep_both" and digest is None:
+                if (file.changes == "keep_both" or prepare_replacements) and digest is None:
                     digest = hash_source_file(item.source, item.entry.path, expected=item.entry)
                 if file.changes == "keep_both":
                     assert digest is not None
@@ -164,6 +165,8 @@ def check_backup_capacity(
                         path, reused = choice.path, choice.reused
                     else:
                         require_destination_name(destination)
+                else:
+                    require_destination_name(Destination(budget.volume, path))
                 normalized = _path_key(path)
                 key = (alias, normalized)
                 parents = {(alias, parent) for parent in normalized.parents}
@@ -176,10 +179,15 @@ def check_backup_capacity(
                 destination = Destination(budget.volume, path)
                 size = destination.file_size()
                 reused = reused and size == file.size
-                if not reused and size == file.size:
+                previous = None
+                read_preimage = prepare_replacements and file.changes == "replace_verified"
+                if not reused and size is not None and (size == file.size or read_preimage):
                     if digest is None:
                         digest = hash_source_file(item.source, item.entry.path, expected=item.entry)
-                    reused = destination.recover_digest(sync=False) == digest
+                    previous = destination.recover_digest(sync=False)
+                    if previous is None:
+                        raise StateError("Cel zmienił się podczas planowania BACKUP.")
+                    reused = previous == digest
                 if reused:
                     budget.results["verified"] += 1
                     copies.append(BackupCopy(file.path, alias, path, "verified", pair, digest))
@@ -197,7 +205,8 @@ def check_backup_capacity(
                 budget.transfer_parents.update(destination.preflight(allow_existing=True))
                 budget.media_bytes += budget.allocated(file.size)
                 budget.results[action] += 1
-                copies.append(BackupCopy(file.path, alias, path, action, pair, digest))
+                copies.append(BackupCopy(file.path, alias, path, action, pair, digest,
+                                         previous=previous if action == "replace" else None))
                 if item.month is not None:
                     months.add(item.month)
             except (OSError, StateError) as error:

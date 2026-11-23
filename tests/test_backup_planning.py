@@ -12,13 +12,14 @@ import shutil
 from unittest.mock import patch
 
 from media_archive.backup_planning import plan_backup
-from media_archive.backup_append import execute_append
+from media_archive.backup_execution import execute_backup_trial
 from media_archive._transfer_files import Part
 from media_archive.cli import main
 from media_archive.config import ConfigError, load_config
 from media_archive.devices import VolumeUnavailable
 from media_archive.sources import LocalSource
 from media_archive.state import DeviceKey, StateError, history, journal, open_database, transaction
+from media_archive.state.catalog import load_locations
 from media_archive.state.registry import initialize_database, load_registered_devices, register_configuration
 from tests.config_fixtures import registry_values, write_config
 from tests.test_import_planning import mounted
@@ -144,7 +145,7 @@ class BackupPlanningTests(unittest.TestCase):
         self.assertEqual(unavailable.files, ())
         self.assertIn("odłączony", [row["stan"] for row in unavailable.details["Cele BACKUP"]])
 
-    def test_cli_only_accepts_dry_run(self) -> None:
+    def test_cli_requires_explicit_backup_mode(self) -> None:
         output = StringIO()
         with redirect_stdout(output), redirect_stderr(output):
             with self.assertRaises(SystemExit) as error:
@@ -152,6 +153,27 @@ class BackupPlanningTests(unittest.TestCase):
             self.assertEqual(error.exception.code, 2)
             self.assertEqual(main(["--config", str(self.settings), "backup", "--dry-run", "--profile", "data"]), 0)
         self.assertIn("Wszystko", output.getvalue())
+
+    def test_cli_rejects_unverified_replacement_and_preserves_old_file(self) -> None:
+        self._file("documents", "signed.pdf", b"edited")
+        self._archive_file("data", "a", "documents", "signed.pdf", b"old")
+        group = self.config.archive_group("data")
+        archive = group.target("a").mount / group.root_relative / self.config.collection("documents").archive_relative
+        command = ["backup", "--replace-test", "--profile", "data", "--collection", "documents", "--targets", "a"]
+
+        def copy_corrupted(part, source_fd):
+            Path(f"/proc/self/fd/{part.directory}/copy").write_bytes(b"broken")
+
+        stderr = StringIO()
+        with (redirect_stdout(StringIO()), redirect_stderr(stderr),
+              patch("media_archive.transfer.verify_volume", side_effect=self._verify_volume),
+              patch("media_archive.backup_execution.open_local_source", side_effect=self._backup_source),
+              patch.object(Part, "rsync_from", copy_corrupted)):
+            with self.assertRaises(SystemExit) as error:
+                main(command)
+            self.assertEqual(error.exception.code, 2)
+            self.assertEqual(main(["--config", str(self.settings), *command]), 3)
+        self.assertEqual((archive / "signed.pdf").read_bytes(), b"old")
 
     def test_month_menu_and_explicit_month_report_blocked_date_directories(self) -> None:
         self.connected.add(("video", "a"))
@@ -294,8 +316,160 @@ class BackupPlanningTests(unittest.TestCase):
 
     def _append(self, alias="a", **options):
         with (patch("media_archive.transfer.verify_volume", side_effect=self._verify_volume),
-              patch("media_archive.backup_append.open_local_source", side_effect=self._backup_source)):
-            return execute_append(self.config, profile_id="data", targets=(alias,), collection_id="photos", **options)
+              patch("media_archive.backup_execution.open_local_source", side_effect=self._backup_source)):
+            return execute_backup_trial(self.config, profile_id="data", targets=(alias,), collection_id="photos", **options)
+
+    def _replace(self, collection_id="documents", targets=("a",)):
+        with (patch("media_archive.transfer.verify_volume", side_effect=self._verify_volume),
+              patch("media_archive.backup_execution.open_local_source", side_effect=self._backup_source)):
+            return execute_backup_trial(self.config, profile_id="data", targets=targets, collection_id=collection_id,
+                                  replace_test=True)
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_replacement_uses_effective_policy_and_records_new_proof_per_disk(self) -> None:
+        self.connected.add(("data", "b"))
+        document = self._file("documents", "signed.pdf", b"old")
+        initial = self._replace(None, ("a", "b"))
+        self.assertEqual(initial.code, 0, initial.details)
+        self._write(document, b"edited document")
+        for collection in ("review", "reviewed", "sent", "backlog", "photos"):
+            self._file(collection, "image.jpg", b"edited")
+            for alias in ("a", "b"):
+                self._archive_file("data", alias, collection, "image.jpg", b"old")
+        plan = self._replace(None, ("a", "b"))
+        self.assertEqual(plan.code, 0, plan.details)
+        results = plan.details["Wyniki BACKUP"]
+        self.assertEqual(len(results), 8)
+        self.assertTrue(all(row["wynik"] == "zastąpiono" for row in results))
+        group = self.config.archive_group("data")
+        for alias in ("a", "b"):
+            root = group.target(alias).mount / group.root_relative
+            for collection in ("review", "reviewed", "sent", "backlog", "photos"):
+                path = root / self.config.collection(collection).archive_relative / "image.jpg"
+                self.assertEqual(path.read_bytes(), b"old" if collection in ("backlog", "photos") else b"edited")
+                if collection in ("review", "reviewed", "sent"):
+                    self.assertEqual(list(path.parent.iterdir()), [path])
+            archived = root / self.config.collection("documents").archive_relative / "signed.pdf"
+            self.assertEqual(archived.read_bytes(), b"edited document")
+            self.assertEqual(list(archived.parent.iterdir()), [archived])
+        with open_database(self.database) as connection:
+            old, current = history.load_occurrences(connection, "local", str(document))
+            seen = history.load_archive_copies(connection, old.id)
+            fresh = history.load_archive_copies(connection, current.id)
+            self.assertEqual(len({copy.device_id for copy in fresh}), 2)
+            self.assertEqual({row.read_sha256 for row in fresh}, {sha256(b"edited document").hexdigest()})
+            self.assertTrue({row.id for row in fresh}.isdisjoint(row.id for row in seen))
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_replacement_restarts_after_interrupt_before_publication(self) -> None:
+        self._file("documents", "signed.pdf", b"edited")
+        self._archive_file("data", "a", "documents", "signed.pdf", b"old")
+        target = self.config.archive_group("data").target("a").mount
+        with patch.object(Part, "publish", side_effect=KeyboardInterrupt):
+            interrupted = self._replace()
+        self.assertEqual(interrupted.code, 130, interrupted.details)
+        archive = target / interrupted.copies[0].archive_path
+        self.assertEqual(archive.read_bytes(), b"old")
+        with open_database(self.database) as connection:
+            pending, = journal.load_unfinished(connection)
+            self.assertEqual(journal.load_attempts(connection, pending.id)[-1].state, "needs_review")
+        resumed = self._replace()
+        self.assertEqual(resumed.code, 0, resumed.details)
+        self.assertEqual(resumed.details["Wyniki BACKUP"][0]["operacja"], pending.id)
+        self.assertEqual(archive.read_bytes(), b"edited")
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_replacement_recovers_after_publication_without_transferring_again(self) -> None:
+        source = self._file("documents", "signed.pdf", b"edited")
+        self._archive_file("data", "a", "documents", "signed.pdf", b"old")
+        with patch("media_archive.transfer.journal.commit_result", side_effect=KeyboardInterrupt):
+            interrupted = self._replace()
+        self.assertEqual(interrupted.code, 130, interrupted.details)
+        with open_database(self.database) as connection:
+            pending, = journal.load_unfinished(connection)
+            first = journal.load_attempts(connection, pending.id)[-1]
+            location, = history.load_occurrences(connection, "local", str(source))
+            self.assertEqual(history.load_archive_copies(connection, location.id), ())
+        with patch.object(Part, "rsync_from", side_effect=AssertionError("plik jest już opublikowany")):
+            resumed = self._replace()
+        self.assertEqual(resumed.code, 0, resumed.details)
+        with open_database(self.database) as connection:
+            evidence, = history.load_archive_copies(connection, location.id)
+            self.assertNotEqual(evidence.id, first.verification_id)
+            self.assertEqual(journal.load_unfinished(connection), ())
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_replacement_reconciles_previous_publication_before_new_source_version(self) -> None:
+        source = self._file("documents", "signed.pdf", b"version a")
+        initial = self._replace()
+        self.assertEqual(initial.code, 0, initial.details)
+        path = self.config.archive_group("data").target("a").mount / initial.copies[0].archive_path
+        self._write(source, b"version b")
+        with patch("media_archive.transfer.journal.commit_result", side_effect=KeyboardInterrupt):
+            self.assertEqual(self._replace().code, 130)
+        self.assertEqual(path.read_bytes(), b"version b")
+        with open_database(self.database) as connection:
+            pending, = journal.load_unfinished(connection)
+        self._write(source, b"version c")
+        self.assertEqual(self._replace().code, 0)
+        self.assertEqual(path.read_bytes(), b"version c")
+        with open_database(self.database) as connection:
+            self.assertEqual(journal.load_unfinished(connection), ())
+            last = journal.load_attempts(connection, pending.id)[-1]
+            self.assertEqual(last.state, "committed")
+            _, previous, _ = history.load_occurrences(connection, "local", str(source))
+            proof, = history.load_archive_copies(connection, previous.id)
+            self.assertEqual(proof.id, last.verification_id)
+        self._write(source, b"version b")
+        self.assertEqual(self._replace().code, 0)
+        self.assertEqual(path.read_bytes(), b"version b")
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_replacement_refreshes_catalog_when_previous_version_is_already_present(self) -> None:
+        source = self._file("documents", "signed.pdf", b"old")
+        initial = self._replace()
+        self.assertEqual(initial.code, 0, initial.details)
+        relative = initial.copies[0].archive_path
+        archive = self.config.archive_group("data").target("a").mount / relative
+        self._write(source, b"edited")
+        self.assertEqual(self._replace().code, 0)
+        self._write(source, b"old")
+        self._write(archive, b"old")
+
+        with patch.object(Part, "rsync_from", side_effect=AssertionError("przywrócona kopia już istnieje")):
+            restored = self._replace()
+            repeated = self._replace()
+        self.assertEqual(restored.code, 0, restored.details)
+        self.assertEqual(repeated.code, 0, repeated.details)
+        outcome, = restored.details["Wyniki BACKUP"]
+        self.assertEqual(outcome["wynik"], "zgodna")
+        self.assertEqual(repeated.details["Wyniki BACKUP"][0]["operacja"], outcome["operacja"])
+        with open_database(self.database) as connection:
+            rows = [row for row in load_locations(connection, None, None) if row.path == relative.as_posix()]
+            present, = [row for row in rows if row.present]
+            self.assertEqual(present.sha256, sha256(b"old").hexdigest())
+            old, _ = history.load_occurrences(connection, "local", str(source))
+            self.assertEqual(len(history.load_archive_copies(connection, old.id)), 2)
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_replacement_protects_a_changed_destination_during_publication_and_retry(self) -> None:
+        self._file("documents", "signed.pdf", b"edited")
+        self._archive_file("data", "a", "documents", "signed.pdf", b"old")
+        publish = Part.publish
+
+        def change_then_publish(part, destination, *args, **kwargs):
+            self._write(destination.volume.root / destination.path, b"unexpected")
+            publish(part, destination, *args, **kwargs)
+
+        with patch.object(Part, "publish", change_then_publish):
+            blocked = self._replace()
+        self.assertEqual(blocked.code, 3, blocked.details)
+        disk = self.config.archive_group("data").target("a").mount
+        path = disk / blocked.copies[0].archive_path
+        self.assertEqual(path.read_bytes(), b"unexpected")
+        with patch.object(Part, "rsync_from", side_effect=AssertionError("zmieniony cel nie pozwala na transfer")):
+            self.assertEqual(self._replace().code, 3)
+        self.assertEqual(path.read_bytes(), b"unexpected")
 
     @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
     def test_append_pins_different_names_and_reuses_verified_copies(self) -> None:
@@ -387,7 +561,7 @@ class BackupPlanningTests(unittest.TestCase):
             (archive / relative).unlink()
             return plan
 
-        with (patch("media_archive.backup_append.plan_backup", side_effect=plan_then_remove),
+        with (patch("media_archive.backup_execution.plan_backup", side_effect=plan_then_remove),
               patch.object(Part, "create", side_effect=AssertionError("transfer was not budgeted"))):
             result = self._append()
         self.assertEqual(result.code, 3)

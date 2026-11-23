@@ -15,7 +15,7 @@ Revision `0003` adds persistent history and initialization state. Use `media_arc
 | `record_placement(connection, import_id, verification_id)` | Record a matching verified placement in the collection registered to the source profile. |
 | `assign_archive_pair(connection, local_occurrence_id, first_device_id, second_device_id, required_path)` | Record the two required devices and the disk-relative path before backup. |
 | `pin_archive_path(connection, local_occurrence_id, device_id, path)` | Finalize the required path for a member of the recorded pair. |
-| `record_archive_copy(connection, local_occurrence_id, verification_id)` | Link matching verification on the required path and device to its archive assignment. |
+| `record_archive_copy(connection, local_occurrence_id, verification_id, update_presence=False)` | Link matching verification to its archive assignment. For replacement policies, record the verified content as present and different historical contents at the same path and volume as absent. |
 
 Resolve a registered phone or camera alias to its stable profile ID with `load_source_id(connection, kind, alias)`. Read rows with `load_content()`, `load_occurrence()`, `load_occurrences()` by kind and path, `load_observations()`, `load_verifications()`, `load_imports()` by source profile ID, `load_placement()` by import ID, and `load_archive_pair()` or `load_archive_copies()` by local occurrence ID. The record readers return SQLAlchemy row mappings or tuples of mappings. Singular optional results return `None`. Read the verification through its occurrence ID to get the historical path, device and volume. Evidence timestamps are stored in UTC. SHA-256 is the fixed verification algorithm.
 

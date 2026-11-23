@@ -287,7 +287,8 @@ def load_archive_paths(connection: Connection, local_occurrence_id: int) -> tupl
     )).mappings())
 
 
-def record_archive_copy(connection: Connection, local_occurrence_id: int, verification_id: int) -> None:
+def record_archive_copy(connection: Connection, local_occurrence_id: int, verification_id: int, *,
+                        update_presence: bool = False) -> None:
     """Link a verified archive occurrence to its previously recorded requirement."""
     require_write_transaction(connection)
     local = load_occurrence(connection, local_occurrence_id)
@@ -304,6 +305,14 @@ def record_archive_copy(connection: Connection, local_occurrence_id: int, verifi
     connection.execute(history.copies.insert().values(
         local_occurrence_id=local.id, verification_id=verification_id,
     ))
+    if update_presence:
+        proof = require_row(connection, history.verifications, id=verification_id)
+        observed_at = datetime.now(timezone.utc)
+        record_observation(connection, archive.id, proof.run_id, observed_at=observed_at,
+                           present=True, size=proof.bytes_read)
+        for older in load_occurrences(connection, "archive", archive.path):
+            if older.volume_id == archive.volume_id and older.content_id not in (None, archive.content_id):
+                record_observation(connection, older.id, proof.run_id, observed_at=observed_at, present=False)
 
 
 def load_occurrence(connection: Connection, occurrence_id: int) -> RowMapping:
@@ -460,6 +469,14 @@ def load_archive_copies(connection: Connection, local_occurrence_id: int) -> tup
         .join(history.occurrences, history.verifications.c.occurrence_id == history.occurrences.c.id)
         .where(history.copies.c.local_occurrence_id == local_occurrence_id).order_by(history.verifications.c.id)
     ).mappings())
+
+
+def archive_copy_last_seen_present(connection: Connection, occurrence_id: int) -> bool:
+    """Check whether the latest observation still marks a recorded copy present."""
+    observation = history.observations
+    query = (select(observation.c.present).where(observation.c.occurrence_id == occurrence_id)
+             .order_by(observation.c.observed_at.desc(), observation.c.id.desc()).limit(1))
+    return connection.scalar(query) == 1
 
 
 def load_archive_locations(connection: Connection, volume_id: int, content_id: int) -> tuple[str, ...]:

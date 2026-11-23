@@ -321,10 +321,45 @@ class Part:
             os.fsync(fd)
             return digest, status
 
-    def publish(self, destination: Destination, verified: os.stat_result, *, allow_link_fallback: bool = True) -> None:
+    def publish(self, destination: Destination, verified: os.stat_result, *, allow_link_fallback: bool = True,
+                previous: SourceDigest | None = None) -> None:
+        if previous is None:
+            self._publish_new(destination, verified, allow_link_fallback)
+        else:
+            self._replace_verified(destination, verified, previous)
+        os.fsync(self.directory)
+        destination.check_parent(self.parent, sync=True)
+        published = os.stat(destination.path.name, dir_fd=self.parent, follow_symlinks=False)
+        if not os.path.samestat(verified, published) or (published.st_size, published.st_mtime_ns) != (
+            verified.st_size, verified.st_mtime_ns
+        ):
+            raise StateError("Opublikowany plik zmienił się przed zapisaniem wyniku.")
+        if os.path.samestat(os.stat(self.name, dir_fd=self.parent, follow_symlinks=False), os.fstat(self.directory)):
+            try:
+                os.rmdir(self.name, dir_fd=self.parent)
+            except OSError:
+                pass  # The copy is already durable; retain any remaining directory.
+
+    def _check_part(self, destination: Destination, verified: os.stat_result) -> None:
         destination.check_parent(self.parent)
         if _signature(os.stat("copy", dir_fd=self.directory, follow_symlinks=False)) != _signature(verified):
             raise StateError("Część zmieniła się od weryfikacji.")
+
+    def _replace_verified(self, destination: Destination, verified: os.stat_result, previous: SourceDigest) -> None:
+        name = destination.path.name
+        try:
+            with _open_regular(self.parent, name, self.mount_id) as fd:
+                digest, status = _read_digest(fd)
+                self._check_part(destination, verified)
+                if (digest != previous
+                        or _signature(os.stat(name, dir_fd=self.parent, follow_symlinks=False)) != _signature(status)):
+                    raise TransferConflict("Starsza kopia zmieniła się przed podmianą. Pozostawiono ją bez zmian.")
+                os.replace("copy", name, src_dir_fd=self.directory, dst_dir_fd=self.parent)
+        except FileNotFoundError:
+            raise TransferConflict("Starsza kopia zniknęła przed podmianą.") from None
+
+    def _publish_new(self, destination: Destination, verified: os.stat_result, allow_link_fallback: bool) -> None:
+        self._check_part(destination, verified)
         try:
             try:
                 _rename_noreplace(self.directory, "copy", self.parent, destination.path.name)
@@ -339,15 +374,3 @@ class Part:
                 os.unlink("copy", dir_fd=self.directory)
         except FileExistsError:
             raise TransferConflict("Plik docelowy już istnieje. Pozostawiono go bez zmian.") from None
-        os.fsync(self.directory)
-        destination.check_parent(self.parent, sync=True)
-        published = os.stat(destination.path.name, dir_fd=self.parent, follow_symlinks=False)
-        if not os.path.samestat(verified, published) or (published.st_size, published.st_mtime_ns) != (
-            verified.st_size, verified.st_mtime_ns
-        ):
-            raise StateError("Opublikowany plik zmienił się przed zapisaniem wyniku.")
-        if os.path.samestat(os.stat(self.name, dir_fd=self.parent, follow_symlinks=False), os.fstat(self.directory)):
-            try:
-                os.rmdir(self.name, dir_fd=self.parent)
-            except OSError:
-                pass  # The copy is already durable; retain any remaining directory.
