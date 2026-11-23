@@ -117,13 +117,13 @@ class Destination:
             return
         raise TransferConflict("Plik docelowy już istnieje. Pozostawiono go bez zmian.")
 
-    def preflight(self) -> tuple[Path, ...]:
+    def preflight(self, *, allow_existing: bool = False) -> tuple[Path, ...]:
         """Check the writable directory for the next creation and list missing parents."""
         parts = self.path.parent.parts
         with self._parents(nearest=True) as directories:
             parent = directories[-1]
             depth = len(directories) - 1
-            if depth == len(parts):
+            if not allow_existing and depth == len(parts):
                 try:
                     os.stat(self.path.name, dir_fd=parent, follow_symlinks=False)
                 except FileNotFoundError:

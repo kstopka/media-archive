@@ -1,4 +1,4 @@
-"""Read-only BACKUP scope selection and monthly work discovery."""
+"""Read-only BACKUP scope, target and capacity planning."""
 
 from collections import Counter
 from collections.abc import Callable, Iterator
@@ -8,15 +8,16 @@ from datetime import date
 from pathlib import Path, PurePosixPath
 import stat
 
-from media_archive._transfer_files import Destination
+from media_archive.backup_capacity import BackupCopy, check_backup_capacity
 from media_archive.audit import _Scan, _scan
 from media_archive.config import ConfigError, Configuration
 from media_archive.config.collections import BackupProfile, LocalCollection
 from media_archive.devices import MountedVolume, VolumeUnavailable, verify_volume
 from media_archive.operations import check_application_paths
-from media_archive.sources import LocalSource, SourceEntry, hash_source_file
+from media_archive.sources import LocalSource, SourceEntry
 from media_archive.state import DeviceKey, StateError, history, open_database, validate_registered_configuration
 from media_archive.state.locking import installation_lock
+from media_archive.state.registry import load_registered_devices
 
 
 _YEAR_FOLDER_PROBLEM = "Katalog roku zastępuje wpis innego typu."
@@ -41,6 +42,7 @@ class BackupPlan:
     message: str
     details: dict[str, object]
     files: tuple[BackupFile, ...] = ()
+    copies: tuple[BackupCopy, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -49,6 +51,7 @@ class _Candidate:
     month: str | None
     source: LocalSource
     entry: SourceEntry
+    volume_id: int
 
 
 def _month(value: str) -> date:
@@ -150,7 +153,8 @@ def _archive_owner(path: Path, reserved: tuple[tuple[str, PurePosixPath], ...]) 
 
 def _collect(config: Configuration, stack: ExitStack, roots: tuple[LocalCollection, ...],
              layouts: tuple[LocalCollection, ...], first: date | None, archive_root: Path,
-             reserved: tuple[tuple[str, PurePosixPath], ...], errors: list[dict[str, str]]) -> tuple[_Candidate, ...]:
+             reserved: tuple[tuple[str, PurePosixPath], ...],
+             local_ids: dict[Path, int], errors: list[dict[str, str]]) -> tuple[tuple[_Candidate, ...], set[str]]:
     mounts: dict[DeviceKey, MountedVolume] = {}
     files = {}
     for root in roots:
@@ -167,7 +171,8 @@ def _collect(config: Configuration, stack: ExitStack, roots: tuple[LocalCollecti
                     _issue(errors, layout.local_root, error)
         for scope in sorted(set(scopes)):
             try:
-                source = LocalSource(_local_mount(config, stack, mounts, scope), scope)
+                volume = _local_mount(config, stack, mounts, scope)
+                source = LocalSource(volume, scope)
                 scan = _Scan()
                 _scan(source, scan)
             except (StateError, OSError) as error:
@@ -205,9 +210,9 @@ def _collect(config: Configuration, stack: ExitStack, roots: tuple[LocalCollecti
                 files[path] = _Candidate(
                     BackupFile(path, destination, owner.id, entry.size, policy.id, policy.changes,
                                policy.deletions, owner.allow_delete and first is None),
-                    month, source, entry,
+                    month, source, entry, local_ids[volume.root],
                 )
-    return tuple(files[path] for path in sorted(files))
+    return tuple(files[path] for path in sorted(files)), {volume.physical_device for volume in mounts.values()}
 
 
 def _issue(errors: list[dict[str, str]], path: Path, error: StateError | OSError, *, alias: str = "") -> None:
@@ -215,51 +220,6 @@ def _issue(errors: list[dict[str, str]], path: Path, error: StateError | OSError
     if alias:
         issue["cel"] = alias
     errors.append(issue)
-
-
-def _pending_months(candidates: tuple[_Candidate, ...], targets: dict[str, MountedVolume],
-                    errors: list[dict[str, str]], announce: Callable[[str], None]) -> list[str]:
-    dated: dict[str, list[_Candidate]] = {}
-    for candidate in candidates:
-        if candidate.month is not None:
-            dated.setdefault(candidate.month, []).append(candidate)
-    pending = []
-    for month, files in sorted(dated.items(), reverse=True):
-        announce(f"BACKUP · sprawdzanie miesiąca {month}")
-        if _month_needs_work(files, targets, errors):
-            pending.append(month)
-    return pending
-
-
-def _month_needs_work(files: list[_Candidate], targets: dict[str, MountedVolume],
-                      errors: list[dict[str, str]]) -> bool:
-    comparisons = []
-    for item in files:
-        same_size = []
-        for alias, volume in targets.items():
-            path = item.file.archive_path
-            try:
-                destination = Destination(volume, path)
-                if destination.file_size() != item.entry.size:
-                    return True
-                same_size.append((alias, destination))
-            except (StateError, OSError) as error:
-                _issue(errors, path, error, alias=alias)
-        if same_size:
-            comparisons.append((item, same_size))
-    for item, same_size in comparisons:
-        try:
-            source_digest = hash_source_file(item.source, item.entry.path, expected=item.entry)
-        except (StateError, OSError) as error:
-            _issue(errors, item.file.path, error)
-            continue
-        for alias, destination in same_size:
-            try:
-                if destination.recover_digest(sync=False) != source_digest:
-                    return True
-            except (StateError, OSError) as error:
-                _issue(errors, item.file.archive_path, error, alias=alias)
-    return False
 
 
 def _probe_targets(config: Configuration, stack: ExitStack, group_ids: set[str],
@@ -291,19 +251,23 @@ def _probe_targets(config: Configuration, stack: ExitStack, group_ids: set[str],
 
 
 def plan_backup(config: Configuration, *, profile_id: str | None = None, collection_id: str | None = None,
-                month: str | None = None, targets: tuple[str, ...] = (),
+                month: str | None = None, targets: tuple[str, ...] = (), pair: tuple[str, ...] = (),
                 announce: Callable[[str], None] = lambda _: None) -> BackupPlan:
     """Select a registered profile and build a read-only candidate manifest."""
     check_application_paths(config)
     first = _month(month) if month is not None else None
     if targets and (profile_id is None or len(targets) > 2 or len(set(targets)) != len(targets)):
         raise ConfigError("Podaj --profile i jeden albo dwa różne cele przez --targets.")
+    if pair and (profile_id is None or len(pair) != 2 or len(set(pair)) != 2):
+        raise ConfigError("Podaj --profile i dwa różne cele przez --pair.")
     try:
         profiles = (config.backup_profile(profile_id),) if profile_id is not None else config.backup_profiles
-        if targets:
+        if targets or pair:
             group = config.archive_group(profiles[0].archive_group_id)
             for alias in targets:
                 group.target(alias)
+            if any(group.target(alias).state != "active" for alias in pair):
+                raise ConfigError("Nową parę można wybrać tylko spośród aktywnych celów.")
     except KeyError:
         raise ConfigError("Wybierz skonfigurowany profil i cele z jego grupy.") from None
     database = config.app.database_file
@@ -322,12 +286,12 @@ def plan_backup(config: Configuration, *, profile_id: str | None = None, collect
         details["Wybrane cele"] = list(selected)
         if len(selected) > 2 or (targets and set(targets) != set(selected)):
             return BackupPlan(3, "Wybierz jeden albo dwa dostępne cele przez --profile i --targets.", details)
-        return _plan_scope(config, stack, profile, selected, collection_id, first, details, announce)
+        return _plan_scope(config, stack, profile, selected, collection_id, first, details, pair, announce)
 
 
 def _plan_scope(config: Configuration, stack: ExitStack, profile: BackupProfile,
                 selected: dict[str, MountedVolume], collection_id: str | None, first: date | None,
-                details: dict[str, object], announce: Callable[[str], None]) -> BackupPlan:
+                details: dict[str, object], pair: tuple[str, ...], announce: Callable[[str], None]) -> BackupPlan:
     roots = config.profile_collections(profile.id)
     details["Zakresy BACKUP"] = [{"zbiór": "Wszystko", "label": profile.label}, *(
         {"zbiór": item.id, "label": item.label, "miesiące": bool(config.month_collections(item.id))} for item in roots
@@ -340,13 +304,48 @@ def _plan_scope(config: Configuration, stack: ExitStack, profile: BackupProfile,
                            key=lambda layout: -len(layout.local_root.parts)))
     if first is not None and not layouts:
         raise ConfigError("Wybrany zakres BACKUP nie udostępnia miesięcy.")
-    archive_root = Path(config.archive_group(profile.archive_group_id).root_relative)
+    group = config.archive_group(profile.archive_group_id)
+    archive_root = Path(group.root_relative)
+    bindings = {item.key: item for item in load_registered_devices(config.app.database_file)}
+    devices = {key.alias: item.device_id for key, item in bindings.items()
+               if key.role == "archive" and key.group_id == group.id and item.device_id is not None}
+    local_ids = {}
+    for volume in config.local.volumes:
+        binding = bindings[DeviceKey("local", volume.alias)]
+        if binding.volume_id is not None:
+            local_ids[volume.root] = binding.volume_id
+    if not devices.keys() >= {target.alias for target in group.targets} or len(local_ids) != len(config.local.volumes):
+        raise StateError("Plan BACKUP wymaga zarejestrowanych urządzeń i woluminów.")
+    active = tuple(target.alias for target in group.targets if target.state == "active")
+    pair = pair or (active if len(active) == 2 else ())
+    proposed_pair = frozenset(devices[alias] for alias in pair)
+    pair_keys = tuple(DeviceKey("archive", alias, group.id) for alias in pair)
+    hardware_ids = [bindings[key].hardware_id for key in pair_keys if bindings[key].hardware_id is not None]
+    if len(hardware_ids) != len(set(hardware_ids)):
+        raise StateError("Nowa para BACKUP wymaga dwóch różnych fizycznych dysków.")
+    pair_disks = []
+    for key in pair_keys:
+        volume = selected.get(key.alias)
+        if volume is None:
+            try:
+                volume = stack.enter_context(verify_volume(config, key))
+            except VolumeUnavailable:
+                continue
+        pair_disks.append(volume.physical_device)
+    if len(pair_disks) != len(set(pair_disks)):
+        raise StateError("Nowa para BACKUP wymaga dwóch różnych fizycznych dysków.")
     with open_database(config.app.database_file) as connection:
         reserved = history.archive_destinations(connection, profile.archive_group_id, PurePosixPath(archive_root))
     errors: list[dict[str, str]] = []
-    candidates = _collect(config, stack, roots, layouts, first, archive_root, reserved, errors)
+    candidates, source_disks = _collect(config, stack, roots, layouts, first, archive_root, reserved, local_ids, errors)
+    if source_disks.intersection(pair_disks):
+        raise StateError("Nowa para BACKUP wymaga dysków osobnych od źródeł.")
+    announce("BACKUP · sprawdzanie kopii i miejsca na wybranych nośnikach")
+    copies, pending_months, capacity, outside_selected = check_backup_capacity(
+        config, candidates, selected, source_disks, devices, proposed_pair, errors,
+    )
     if layouts and (collection_id is not None or first is not None):
-        months = _pending_months(candidates, selected, errors, announce)
+        months = sorted(pending_months, reverse=True)
         details["Miesiące z transferami"] = months
         if collection_id is not None and first is None:
             details["Zakresy zbioru"] = ["Wszystko", *months]
@@ -356,10 +355,13 @@ def _plan_scope(config: Configuration, stack: ExitStack, profile: BackupProfile,
         "Pliki w zakresie": len(files),
         "Bajty w zakresie": sum(item.size for item in files),
         "Polityki w zakresie": dict(sorted(Counter(item.policy_id for item in files).items())),
+        "Para dla nowych plików": list(pair),
+        "Pliki przypisane poza wybranymi celami": outside_selected,
+        "Pojemność BACKUP": capacity,
         "Błędy planowania": errors,
     })
     if first is not None:
         details["Miesiąc"] = first.isoformat()[:7]
     if errors:
-        return BackupPlan(3, "Podgląd BACKUP jest niepełny. Sprawdź błędy odczytu i zakresu.", details, files)
-    return BackupPlan(0, "Podgląd zakresu BACKUP gotowy.", details, files)
+        return BackupPlan(3, "Podgląd BACKUP jest niepełny. Sprawdź błędy odczytu i zakresu.", details, files, copies)
+    return BackupPlan(0, "Podgląd zakresu BACKUP gotowy.", details, files, copies)

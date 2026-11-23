@@ -1,6 +1,8 @@
 """Read-only backup scope and target selection using synthetic volumes."""
 
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
+from dataclasses import replace
+from hashlib import sha256
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -11,7 +13,8 @@ from media_archive.backup_planning import plan_backup
 from media_archive.cli import main
 from media_archive.config import ConfigError, load_config
 from media_archive.devices import VolumeUnavailable
-from media_archive.state.registry import initialize_database
+from media_archive.state import DeviceKey, StateError, history, open_database, transaction
+from media_archive.state.registry import initialize_database, load_registered_devices, register_configuration
 from tests.config_fixtures import registry_values, write_config
 from tests.test_import_planning import mounted
 
@@ -36,17 +39,20 @@ class BackupPlanningTests(unittest.TestCase):
         for collection in self.config.collections:
             collection.local_root.mkdir(parents=True, exist_ok=True)
         self.connected = {("data", "a")}
+        self.physical_disks = {}
         self.enterContext(patch("media_archive.backup_planning.verify_volume", side_effect=self._verify_volume))
 
+    @contextmanager
     def _verify_volume(self, config, key, *, writable=False):
         if key.role == "local":
-            return mounted(next(volume.root for volume in config.local.volumes if volume.alias == key.alias))
-        self.assertTrue(writable)
-        if (key.group_id, key.alias) not in self.connected:
-            raise VolumeUnavailable("Brak montowania.")
-        target = config.archive_group(key.group_id).target(key.alias)
-        target.mount.mkdir(exist_ok=True)
-        return mounted(target.mount)
+            path = next(volume.root for volume in config.local.volumes if volume.alias == key.alias)
+        else:
+            if (key.group_id, key.alias) not in self.connected:
+                raise VolumeUnavailable("Brak montowania.")
+            path = config.archive_group(key.group_id).target(key.alias).mount
+            path.mkdir(exist_ok=True)
+        with mounted(path) as volume:
+            yield replace(volume, physical_device=self.physical_disks.get(path, str(path)))
 
     def _file(self, collection, relative, content=b"media"):
         path = self.config.collection(collection).local_root / relative
@@ -160,3 +166,118 @@ class BackupPlanningTests(unittest.TestCase):
                 self.assertEqual(month.details["Błędy planowania"], [error])
                 self.assertEqual(menu.details["Zakresy zbioru"], ["Wszystko"])
                 blocked.unlink()
+
+    def test_capacity_blocks_the_whole_batch_when_one_connected_target_is_full(self) -> None:
+        self.connected.add(("data", "b"))
+        self._file("documents", "changed.pdf", b"new")
+        self._file("documents", "same.pdf", b"same")
+        self._file("photos_main", "2025/2025.02/photo.jpg", b"new")
+        for alias in ("a", "b"):
+            self._archive_file("data", alias, "documents", "changed.pdf", b"old")
+            self._archive_file("data", alias, "documents", "same.pdf", b"same")
+            self._archive_file("data", alias, "photos_main", "2025/2025.02/photo.jpg", b"old")
+        group = self.config.archive_group("data")
+        before = self.database.read_bytes()
+        reserve = self.config.app.min_free_bytes
+
+        def space(destination):
+            return (reserve if destination.volume.root == group.target("b").mount else 10 * reserve, 4096)
+
+        with patch("media_archive.backup_capacity.Destination.space", autospec=True, side_effect=space):
+            plan = plan_backup(self.config, profile_id="data")
+        self.assertEqual(plan.code, 3)
+        self.assertEqual(plan.details["Wybrane cele"], ["a", "b"])
+        statuses = {item["cel"]: item["stan"] for item in plan.details["Cele BACKUP"]}
+        self.assertEqual(statuses, {"a": "dostępny", "b": "dostępny"})
+        a, b = plan.details["Pojemność BACKUP"]
+        self.assertEqual(a["brakuje"], 0)
+        self.assertGreater(b["brakuje"], 0)
+        self.assertGreaterEqual(b["rezerwa"], 1024**3)
+        self.assertGreater(b["snapshot"], 0)
+        self.assertGreater(b["katalogi_i_części"], 0)
+        self.assertEqual(b["pliki"], 2 * 4096)
+        self.assertEqual(b["wymagane"], sum(b[key] for key in ("pliki", "katalogi_i_części", "snapshot", "rezerwa")))
+        self.assertEqual({copy.action for copy in plan.copies}, {"verified", "replace", "conflict"})
+        self.assertEqual(self.database.read_bytes(), before)
+        self.assertEqual((group.target("b").mount / group.root_relative / "Documents/changed.pdf").read_bytes(), b"old")
+
+    def test_filters_old_pairs_by_device_and_keeps_the_previous_required_path(self) -> None:
+        values = registry_values(self.root)
+        values["ARCHIVE_DATA_TARGETS"] = "a,b,c,d"
+        for alias in ("c", "d"):
+            prefix = f"ARCHIVE_DATA_TARGET_{alias.upper()}"
+            values[f"{prefix}_MOUNT"] = str(self.root / f"archive-{alias}")
+            values[f"{prefix}_UUID"] = f"archive-test-{alias}"
+            values[f"{prefix}_STATE"] = "active"
+        settings = self.root / "new-pair.env"
+        write_config(settings, values)
+        config = load_config(settings)
+        register_configuration(config)
+        self.connected.add(("data", "c"))
+        existing = self._file("documents", "known.pdf", b"known")
+        new = self._file("documents", "new.pdf", b"new")
+        devices = {item.key: item for item in load_registered_devices(self.database)}
+        local_volume = devices[DeviceKey("local", config.local.volumes[0].alias)].volume_id
+        a, b, c, d = (devices[DeviceKey("archive", alias, "data")].device_id for alias in "abcd")
+        required = Path(config.archive_group("data").root_relative) / "Documents/required.pdf"
+        with open_database(self.database, writable=True) as connection, transaction(connection):
+            content = history.record_content(connection, sha256(b"known").hexdigest(), len(b"known"))
+            occurrence = history.record_occurrence(connection, "local", str(existing), content_id=content,
+                                                   collection_id="documents", volume_id=local_volume)
+            history.assign_archive_pair(connection, occurrence, a, b, required.as_posix())
+        before = self.database.read_bytes()
+        plan = plan_backup(config, profile_id="data", collection_id="documents", targets=("a", "c"), pair=("c", "d"))
+        self.assertEqual(plan.code, 0)
+        copies = {(copy.source, copy.target): copy for copy in plan.copies}
+        self.assertEqual(set(copies), {(existing, "a"), (new, "c")})
+        self.assertEqual(copies[existing, "a"].archive_path, required)
+        self.assertEqual(copies[existing, "a"].required_pair.devices, {a, b})
+        self.assertEqual(copies[new, "c"].required_pair.devices, {c, d})
+        self.assertEqual(self.database.read_bytes(), before)
+
+    def test_rejects_archive_partitions_on_the_same_physical_disk(self) -> None:
+        self.connected.add(("data", "b"))
+        group = self.config.archive_group("data")
+        self.physical_disks[group.target("a").mount] = "same"
+        self.physical_disks[group.target("b").mount] = "same"
+        with self.assertRaisesRegex(StateError, "różnych fizycznych dysk"):
+            plan_backup(self.config, profile_id="data")
+        self.physical_disks[group.target("b").mount] = "different"
+        self.physical_disks[self.config.local.volumes[0].root] = "same"
+        with self.assertRaisesRegex(StateError, "osobnych od źródeł"):
+            plan_backup(self.config, profile_id="data")
+
+    def test_checks_mounted_members_of_new_pair_even_when_only_one_is_selected(self) -> None:
+        self.connected.add(("data", "b"))
+        group = self.config.archive_group("data")
+        self.physical_disks[group.target("a").mount] = "same"
+        self.physical_disks[group.target("b").mount] = "same"
+        self._file("documents", "new.pdf")
+        options = dict(profile_id="data", targets=("a",))
+        for pair in ((), ("a", "b")):
+            with self.subTest(pair=pair):
+                with self.assertRaisesRegex(StateError, "różnych fizycznych dysków"):
+                    plan_backup(self.config, **options, pair=pair)
+        self.connected.remove(("data", "b"))
+        self.assertEqual(plan_backup(self.config, **options).code, 0)
+
+    def test_rejects_file_directory_conflicts_in_planned_archive_paths(self) -> None:
+        group = self.config.archive_group("data")
+        devices = {item.key: item for item in load_registered_devices(self.database)}
+        local = devices[DeviceKey("local", self.config.local.volumes[0].alias)].volume_id
+        a, b = (devices[DeviceKey("archive", alias, "data")].device_id for alias in ("a", "b"))
+        self._file("documents", "album/report.pdf", b"new")
+        for filename in ("aaa.pdf", "zzz.pdf"):
+            with self.subTest(filename=filename):
+                existing = self._file("documents", filename, b"old")
+                with open_database(self.database, writable=True) as connection, transaction(connection):
+                    content = history.record_content(connection, sha256(b"old").hexdigest(), 3)
+                    occurrence = history.record_occurrence(connection, "local", str(existing), content_id=content,
+                                                           collection_id="documents", volume_id=local)
+                    path = Path(group.root_relative) / "Documents/ALBUM"
+                    history.assign_archive_pair(connection, occurrence, a, b, path.as_posix())
+                plan = plan_backup(self.config, profile_id="data", targets=("a",), collection_id="documents")
+                self.assertEqual(plan.code, 3)
+                error, = plan.details["Błędy planowania"]
+                self.assertIn("plik i katalog", error["błąd"])
+                existing.unlink()

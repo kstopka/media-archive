@@ -1,4 +1,4 @@
-# BACKUP scope preview
+# BACKUP scope and capacity preview
 
 Run `backup --dry-run` to see the registered backup profiles that match the connected archive volumes. A single matching profile is proposed and its scope is previewed. When several profiles match, choose one via `--profile`; no media is scanned until the profile is selected.
 
@@ -7,6 +7,7 @@ media-archive backup --dry-run
 media-archive backup --dry-run --profile data
 media-archive backup --dry-run --profile data --targets a --collection photos
 media-archive backup --dry-run --profile data --targets a b --collection photos --month 2025-02
+media-archive backup --dry-run --profile data --targets c --pair c d
 ```
 
 ## Targets and scopes
@@ -17,10 +18,22 @@ At profile level, **All** covers the complete tree of every assigned root collec
 
 A month includes `YYYY/YYYY.MM` under each configured phone-style collection and matching day folders under `Różne YYYY` for camera collections. At profile level, an explicit month combines the dated collections and leaves plain collections outside that scope. The planner reads directory layouts and does not use EXIF, filenames or modification times to assign a month.
 
+## Required archive pairs
+
+The preview checks that the selected targets are on different physical disks and separate from the selected sources. It also checks mounted members of the proposed pair even when only one was selected for transfer. A disconnected member is allowed unless the registry already identifies both members as the same physical device.
+
+A saved pair and its required path still apply to the same local occurrence, matched by volume, collection, path and current SHA-256. Only selected members of that pair are checked. The preview counts files assigned outside the selection separately. For new occurrences, two configured active targets form the proposed pair, even if only one is connected. Use `--pair` with two active target aliases to choose a new pair explicitly when there is no unique default. `--targets` chooses the connected disks to inspect. The preview leaves both existing and proposed assignments in SQLite unchanged. The transfer stage must commit a new assignment before its first copy.
+
 ## Month availability
 
-Select a dated collection to show **All** followed by the months with pending work, newest first. The list depends on the selected connected targets. A missing file or a size difference is enough to show a month. The planner compares SHA-256 for same-size files if the metadata check finds no work. Depending on the volume of already matching data, that read can take time. An explicit `--month` restricts the directory and content checks to that month. File and byte totals describe the selected scope and include copies already present on the targets.
+Select a dated collection to show **All** followed by the months with pending work, newest first. The list depends on the selected connected targets. A month appears when at least one selected member of a required pair needs a copy, a replacement or a conflict variant. The planner checks the required path and compares SHA-256 for same-size files. Depending on the volume of already matching data, that read can take time. An explicit `--month` restricts the directory and content checks to that month. File and byte totals describe the selected scope and include copies already present on the targets.
 
-Read and scope errors are shown with exit code `3`. Both the month list and an explicit month identify any file or other non-directory entry blocking an expected date directory. Treat an incomplete preview as unresolved. This stage discovers scope and policies. Physical independence, persistent required pairs, capacity checks, transfer, cleanup and snapshots belong to subsequent BACKUP stages.
+Read and scope errors are shown with exit code `3`. Both the month list and an explicit month identify any file or other non-directory entry blocking an expected date directory. Treat an incomplete preview as unresolved.
 
-The Python API is `media_archive.backup_planning.plan_backup(config, ...)`. It returns CLI details and candidate files with their required archive paths and effective policies. The preview reads media and SQLite. It creates no reports, media copies, assignments or database records. Tests use registered synthetic volumes to cover scope selection, policy inheritance, month availability and the command's read-only behavior.
+## Capacity of the whole batch
+
+Each selected disk shows its available bytes, required bytes and any deficit. The planner rejects batches that need the same archive path as both a file and a directory, including case or Unicode normalization equivalents. The budget covers new content rounded to allocation blocks, directories, one temporary transfer directory per target and a new snapshot generation. A replacement keeps the old file allocated while reserving the full new file. A conflict reserves room for a new variant. A verified current copy consumes no transfer allocation. The configured reserve is at least 1 GiB per target. The calculation gives no credit for clearing parts, replacing files or deleting older snapshots.
+
+The snapshot estimate includes SQLite's current page count, an allowance of 16 pages per planned copy or check for history growth, the configuration, a manifest allowance and new snapshot directories. Recheck available space and the actual generation size when publishing the snapshot. Any unavailable capacity calculation or shortage on a selected disk blocks the entire preview with exit code `3`. A full connected disk stays selected and its deficit is reported. Transfer, cleanup and snapshot publication follow in later stages.
+
+The Python API is `media_archive.backup_planning.plan_backup(config, ...)`. It returns CLI details, candidate files with effective policies, and per-target copy assessments with their required paths and pairs. The preview reads media and SQLite. It creates no reports, media copies, assignments or database records. Tests use registered synthetic volumes to cover scope selection, policy inheritance, month availability and the command's read-only behavior.

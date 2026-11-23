@@ -191,6 +191,8 @@ def _parser() -> argparse.ArgumentParser:
     backup.add_argument("--dry-run", action="store_true", required=True, help="tylko odczyt i podgląd zakresu")
     backup.add_argument("--profile", metavar="PROFIL")
     backup.add_argument("--targets", nargs="+", metavar="CEL")
+    backup.add_argument("--pair", nargs=2, metavar=("PIERWSZY", "DRUGI"),
+                        help="para archiwalna dla nowych wystąpień")
     backup.add_argument("--collection", metavar="ZBIÓR")
     backup.add_argument("--month", metavar="RRRR-MM")
     device = commands.add_parser("device", help="sprawdź lub jawnie zarejestruj wolumin")
@@ -367,7 +369,7 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             message = "Zapisano zweryfikowaną zmianę lokalizacji."
         elif args.command == "backup":
             outcome = plan_backup(config, profile_id=args.profile, collection_id=args.collection,
-                                  month=args.month, targets=tuple(args.targets or ()),
+                                  month=args.month, targets=tuple(args.targets or ()), pair=tuple(args.pair or ()),
                                   announce=lambda message: print(message, file=sys.stderr, flush=True))
             code, message, details = outcome.code, outcome.message, outcome.details
         elif args.command == "reconcile":

@@ -82,6 +82,14 @@ class Report:
                 lines.append(key)
                 lines.extend(f"- {item['zbiór']} · {item['label']}"
                              + (" · dostępny wybór miesiąca" if item.get("miesiące") else "") for item in value)
+            elif key == "Pojemność BACKUP":
+                for item in value:
+                    lines.append(f"- {item['cel']} · wolne {item['dostępne']} B · wymagane {item['wymagane']} B"
+                                 f" · rezerwa {item['rezerwa']} B · brakuje {item['brakuje']} B")
+                    lines.append(f"  Pliki {item['pliki']} B · katalogi i części {item['katalogi_i_części']} B"
+                                 f" · snapshot {item['snapshot']} B")
+                    lines.append(f"  Zgodne {item['zgodne']} · nowe {item['nowe']} · podmiany {item['podmiany']}"
+                                 f" · warianty konfliktowe {item['warianty_konfliktowe']}")
             elif key == "Błędy planowania":
                 lines.extend(f"- {item['ścieżka']} · {item['błąd']}"
                              + (f" · cel {item['cel']}" if "cel" in item else "") for item in value)

@@ -404,6 +404,18 @@ def load_archive_pair(connection: Connection, local_occurrence_id: int) -> RowMa
     return find(connection, history.pairs, local_occurrence_id=local_occurrence_id)
 
 
+def load_backup_assignments(connection: Connection, collections: set[str]) -> tuple[RowMapping, ...]:
+    """Read saved assignments with the identity of the local bytes they cover."""
+    local = history.occurrences
+    query = (select(local.c.path, local.c.volume_id, local.c.collection_id, history.contents.c.sha256,
+                    history.contents.c.size, history.pairs.c.first_device_id, history.pairs.c.second_device_id,
+                    history.pairs.c.required_path)
+             .select_from(history.pairs).join(local, local.c.id == history.pairs.c.local_occurrence_id)
+             .join(history.contents, history.contents.c.id == local.c.content_id)
+             .where(local.c.collection_id.in_(collections)))
+    return tuple(connection.execute(query).mappings())
+
+
 def load_archive_copies(connection: Connection, local_occurrence_id: int) -> tuple[RowMapping, ...]:
     """Return recorded copy evidence with device and volume IDs, independent of present availability."""
     return tuple(connection.execute(
