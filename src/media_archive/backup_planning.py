@@ -72,8 +72,9 @@ def _layout_year(layout: LocalCollection, year: int) -> str:
 def _layout_month(layout: LocalCollection, year: str, folder: str) -> str | None:
     try:
         if layout.layout == "year_month":
-            day = date.fromisoformat(f"{folder.replace('.', '-')}-01")
-            expected = day.isoformat()[:7].replace("-", ".")
+            month, folder_year = folder.split(".")
+            day = date.fromisoformat(f"{folder_year}-{month}-01")
+            expected = f"{day.month:02d}.{day.year:04d}"
         else:
             day = date.fromisoformat(folder)
             expected = day.isoformat()

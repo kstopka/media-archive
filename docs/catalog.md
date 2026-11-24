@@ -6,13 +6,13 @@ Run `media-archive migrate` to upgrade an existing database to revision `0010`. 
 media-archive search --name 'GX01' --month 2025-02 --source camera:hero
 media-archive search --source phone:example
 media-archive conflicts
-media-archive conflicts --keep-both '/media/working/Photos/2025/2025.02/clip.mp4'
-media-archive catalog-move 42 '/media/working/Photos/2025/2025.02/renamed.mp4'
+media-archive conflicts --keep-both '/media/working/Photos/2025/02.2025/clip.mp4'
+media-archive catalog-move 42 '/media/working/Photos/2025/02.2025/renamed.mp4'
 ```
 
 ## Search
 
-Filters combine with AND. Name matches a substring of the stored filename, ignoring case and Unicode normalization differences. Month matches a recorded SORT month for the same content, using the manual date when set, or an explicit `YYYY.MM` or `YYYY-MM-DD` folder in the stored path. Files without matching date information are omitted when a month is selected. A source filter uses the stable profile alias and kind. Other locations link to that profile through matching content; inventory entries without SHA-256 remain searchable by filename or month.
+Filters combine with AND. Name matches a substring of the stored filename, ignoring case and Unicode normalization differences. Month matches a recorded SORT month for the same content, using the manual date when set, or an explicit `MM.YYYY` or `YYYY-MM-DD` folder in the stored path. Files without matching date information are omitted when a month is selected. A source filter uses the stable profile alias and kind. Other locations link to that profile through matching content; inventory entries without SHA-256 remain searchable by filename or month.
 
 The catalog covers source, collection, unresolved-date and archive locations. Each result identifies a saved occurrence and its device binding, when recorded. Archive paths are relative to the saved volume. The command checks whether a known local or archive volume is accessible and marks inaccessible volumes as last-known locations. Search reads SQLite and checks mounts without scanning media or updating presence. A previous observation or hash is historical evidence even when the volume is mounted.
 

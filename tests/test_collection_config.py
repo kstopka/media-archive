@@ -195,7 +195,7 @@ class CollectionConfigurationTests(unittest.TestCase):
             root / 'Printed' / 'picture.jpg': 'append',
             root / 'Milan' / 'video.mp4': 'append',
             root / 'notes.txt': 'append',
-            root / 'All' / 'Main' / '2026' / '2026.11' / 'x.jpg': 'append',
+            root / 'All' / 'Main' / '2026' / '11.2026' / 'x.jpg': 'append',
         }
         for path, policy_id in cases.items():
             with self.subTest(path=path):

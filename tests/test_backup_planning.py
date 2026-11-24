@@ -81,8 +81,8 @@ class BackupPlanningTests(unittest.TestCase):
         path.write_bytes(content)
 
     def test_profile_all_includes_helpers_and_explicit_child_policies(self) -> None:
-        secondary = self._file("photos_secondary", "2025/2025.02/photo.jpg")
-        primary = self._file("photos_main", "2025/2025.02/photo.jpg")
+        secondary = self._file("photos_secondary", "2025/02.2025/photo.jpg")
+        primary = self._file("photos_main", "2025/02.2025/photo.jpg")
         helper = self._file("photos", "notes.xmp")
         review = self._file("review", "photo.jpg")
         document = self._file("documents", "signed.pdf")
@@ -102,8 +102,8 @@ class BackupPlanningTests(unittest.TestCase):
         self.assertEqual(tuple(self.config.archive_group("data").target("a").mount.iterdir()), ())
 
     def test_months_depend_on_selected_disks_and_compare_equal_size_contents(self) -> None:
-        feb = "2025/2025.02/photo.jpg"
-        jan = "2025/2025.01/photo.jpg"
+        feb = "2025/02.2025/photo.jpg"
+        jan = "2025/01.2025/photo.jpg"
         self._file("photos_main", feb)
         self._file("photos_secondary", feb)
         self._file("photos_secondary", jan)
@@ -129,7 +129,7 @@ class BackupPlanningTests(unittest.TestCase):
         self._file("gopro", "Różne 2025/2025-02-01/HERO8 Black 1/clip.mp4")
         self._file("gopro", "Różne 2025/2025-02-02/HERO8 Black 1/clip.mp4")
         self._file("gopro", "Różne 2025/2025-03-31/HERO8 Black 1/clip.mp4")
-        self._file("finished", "2025/2025.02/export.mp4")
+        self._file("finished", "2025/02.2025/export.mp4")
         proposals = plan_backup(self.config)
         self.assertEqual(proposals.details["Profile BACKUP"], ["data", "video"])
         self.assertEqual(proposals.files, ())
@@ -186,7 +186,7 @@ class BackupPlanningTests(unittest.TestCase):
         self.connected.add(("video", "a"))
         for group, root, layout, directory in (
             ("data", "photos", "photos_main", "2025"),
-            ("data", "photos", "photos_secondary", "2025/2025.02"),
+            ("data", "photos", "photos_secondary", "2025/02.2025"),
             ("video", "gopro", "gopro", "Różne 2025/2025-02-01"),
         ):
             with self.subTest(directory=directory):
@@ -205,11 +205,11 @@ class BackupPlanningTests(unittest.TestCase):
         self.connected.add(("data", "b"))
         self._file("documents", "changed.pdf", b"new")
         self._file("documents", "same.pdf", b"same")
-        self._file("photos_main", "2025/2025.02/photo.jpg", b"new")
+        self._file("photos_main", "2025/02.2025/photo.jpg", b"new")
         for alias in ("a", "b"):
             self._archive_file("data", alias, "documents", "changed.pdf", b"old")
             self._archive_file("data", alias, "documents", "same.pdf", b"same")
-            self._archive_file("data", alias, "photos_main", "2025/2025.02/photo.jpg", b"old")
+            self._archive_file("data", alias, "photos_main", "2025/02.2025/photo.jpg", b"old")
         group = self.config.archive_group("data")
         before = self.database.read_bytes()
         reserve = self.config.app.min_free_bytes
@@ -1157,7 +1157,7 @@ class BackupPlanningTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
     def test_append_pins_different_names_and_reuses_verified_copies(self) -> None:
-        relative = "2025/2025.02/image.jpg"
+        relative = "2025/02.2025/image.jpg"
         source = self._file("photos_main", relative, b"new content")
         self._archive_file("data", "a", "photos_main", relative, b"old content")
         group = self.config.archive_group("data")
@@ -1187,7 +1187,7 @@ class BackupPlanningTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
     def test_append_requires_approval_to_copy_when_history_has_another_path(self) -> None:
-        relative = "2025/2025.02/image.jpg"
+        relative = "2025/02.2025/image.jpg"
         self._file("photos_main", relative, b"known")
         self._archive_file("data", "a", "photos_main", "previous/image.jpg", b"known")
         group = self.config.archive_group("data")
@@ -1214,7 +1214,7 @@ class BackupPlanningTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
     def test_append_recovers_published_file_before_committing_its_evidence(self) -> None:
-        source = self._file("photos_main", "2025/2025.02/image.jpg", b"new")
+        source = self._file("photos_main", "2025/02.2025/image.jpg", b"new")
         original = Part.publish
 
         def publish_then_interrupt(part, *args, **kwargs):
@@ -1239,7 +1239,7 @@ class BackupPlanningTests(unittest.TestCase):
             self.assertEqual(evidence.result, "match")
 
     def test_append_does_not_copy_a_verified_file_which_disappears_after_preflight(self) -> None:
-        relative = "2025/2025.02/image.jpg"
+        relative = "2025/02.2025/image.jpg"
         self._file("photos_main", relative)
         self._archive_file("data", "a", "photos_main", relative)
         group = self.config.archive_group("data")
@@ -1260,7 +1260,7 @@ class BackupPlanningTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
     def test_append_finishes_latest_operation_after_interrupted_recreation(self) -> None:
-        source = self._file("photos_main", "2025/2025.02/image.jpg", b"new")
+        source = self._file("photos_main", "2025/02.2025/image.jpg", b"new")
         first = self._append()
         self.assertEqual(first.code, 0, first.details)
         previous = first.details["Wyniki BACKUP"][0]["operacja"]
@@ -1291,7 +1291,7 @@ class BackupPlanningTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
     def test_append_extends_suffix_reserved_by_another_file_in_the_batch(self) -> None:
-        folder = Path("2025/2025.02")
+        folder = Path("2025/02.2025")
         content = b"new"
         digest = sha256(content).hexdigest()
         relative = folder / "image.jpg"

@@ -109,7 +109,7 @@ class SortPlanningTests(unittest.TestCase):
         report, = self.config.app.reports_dir.glob("*/report.json")
         rows = json.loads(report.read_text(encoding="utf-8"))["szczegóły"]["Plan SORT"]
         by_name = {row["plik"]: row for row in rows}
-        self.assertTrue(by_name["photo.png"]["cel"].endswith("/2024/2024.12/photo.png"))
+        self.assertTrue(by_name["photo.png"]["cel"].endswith("/2024/12.2024/photo.png"))
         self.assertTrue(by_name["GX010001.MP4"]["cel"].endswith("/Różne 2024/2024-12-31/HERO8 Black 1/GX010001.MP4"))
         self.assertTrue(by_name["GX020001.MP4"]["cel"].endswith("/Różne 2025/2025-01-01/HERO8 Black 1/GX020001.MP4"))
         self.assertEqual(by_name["GX020001.MP4"]["metadane"]["surowa_data"], "2024:12:31 23:30:00+00:00")
@@ -131,7 +131,7 @@ class SortPlanningTests(unittest.TestCase):
         planned, = plan_sort(self.config)
         self.assertEqual(planned.state, "ready")
         self.assertEqual(planned.manual_date, date(2025, 2, 1))
-        self.assertTrue(planned.target.as_posix().endswith("/2025/2025.02/photo.png"))
+        self.assertTrue(planned.target.as_posix().endswith("/2025/02.2025/photo.png"))
         self.assertEqual(staging.read_bytes(), _photo())
         self.assertFalse(self.config.local.undated_root.exists())
 

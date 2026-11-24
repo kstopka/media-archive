@@ -71,7 +71,7 @@ def _target(config: Configuration, item: RowMapping, profile: RowMapping, name: 
         root = collection.local_root
         year = f"{day.year:04d}"
         if profile.kind == "phone":
-            target = root / year / f"{year}.{day.month:02d}" / name
+            target = root / year / f"{day.month:02d}.{year}" / name
         else:
             target = root / f"Różne {year}" / day.isoformat() / configured.camera_folder / name
         if (config.collection_for_path(collection.id, target).id != collection.id

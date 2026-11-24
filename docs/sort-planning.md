@@ -15,7 +15,7 @@ ExifTool reads the same open file that was hashed. For photos, the EXIF `DateTim
 
 | Material | Proposed path relative to the configured root |
 | --- | --- |
-| Phone photo or video | `YYYY/YYYY.MM/original-name.ext` |
+| Phone photo or video | `YYYY/MM.YYYY/original-name.ext` |
 | Camera photo or video | `Różne YYYY/YYYY-MM-DD/<CAMERA_FOLDER>/original-name.ext` |
 | Without a valid date | `<kind>/<registered profile ID>/<SHA-256>/original-name.ext` under `LOCAL_UNDATED_ROOT` |
 

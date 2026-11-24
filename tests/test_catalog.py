@@ -31,10 +31,10 @@ class CatalogTests(unittest.TestCase):
             content = history.record_content(connection, sha256(b"x").hexdigest(), 1)
             history.record_occurrence(connection, "source", "/camera/original.jpg", content_id=content,
                                       device_id=phone.device_id)
-            path = "Data/Photos/2025/2025.02/Ło\u0301dz\u0301.jpg"
+            path = "Data/Photos/2025/02.2025/Ło\u0301dz\u0301.jpg"
             known = history.record_occurrence(connection, "archive", path, content_id=content,
                                               volume_id=archive.volume_id)
-            quick = history.record_occurrence(connection, "archive", "Data/Photos/2025/2025.02/quick.jpg",
+            quick = history.record_occurrence(connection, "archive", "Data/Photos/2025/02.2025/quick.jpg",
                                               volume_id=archive.volume_id)
             for occurrence in (known, quick):
                 history.record_observation(connection, occurrence, run, observed_at=now, present=True, size=1)

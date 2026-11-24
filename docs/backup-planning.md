@@ -16,7 +16,7 @@ Automatic preview selection uses approved, writable archive volumes in the chose
 
 At profile level, **All** covers the complete tree of every assigned root collection. Selecting a collection covers its full tree, including helper files and child stages, unless a month is supplied. Plain collections without dated children have no month choice. Files at different paths remain separate candidates, including equal content. Each file uses its deepest configured collection's policy and registered destination. Monthly scopes exclude approval of local-deletion propagation and retain the configured change policy.
 
-A month includes `YYYY/YYYY.MM` under each configured phone-style collection and matching day folders under `Różne YYYY` for camera collections. At profile level, an explicit month combines the dated collections and leaves plain collections outside that scope. The planner reads directory layouts and does not use EXIF, filenames or modification times to assign a month.
+A month includes `YYYY/MM.YYYY` under each configured phone-style collection and matching day folders under `Różne YYYY` for camera collections. For example, `--month 2026-10` selects `2026/10.2026` in each phone collection. At profile level, an explicit month combines the dated collections and leaves plain collections outside that scope. The planner reads directory layouts and does not use EXIF, filenames or modification times to assign a month.
 
 ## Required archive pairs
 

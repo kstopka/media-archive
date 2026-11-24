@@ -24,8 +24,9 @@ def _name(value: str) -> str:
 
 
 def _path_month(path: Path, month: str) -> bool:
+    year, number = month.split("-")
     for part in path.parent.parts:
-        if part == month.replace("-", "."):
+        if part == f"{number}.{year}":
             return True
         try:
             day = date.fromisoformat(part)

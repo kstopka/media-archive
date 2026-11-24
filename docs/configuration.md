@@ -70,7 +70,7 @@ All application fields and both local working directories are required. Retentio
 | `archive_relative` | `COLLECTION_<ID>_ARCHIVE_RELATIVE` | Required relative path below archive-group root |
 | `policy_id` | `COLLECTION_<ID>_POLICY` | Required policy reference |
 | `parent_id` | `COLLECTION_<ID>_PARENT` | Optional collection reference; empty/absent means `None` |
-| `layout` | `COLLECTION_<ID>_LAYOUT` | `plain` (default), `year_month`, `camera_day` |
+| `layout` | `COLLECTION_<ID>_LAYOUT` | `plain` (default), `year_month` (`YYYY/MM.YYYY`), `camera_day` |
 | `allow_delete` | `COLLECTION_<ID>_ALLOW_DELETE` | Pydantic boolean; default `False`; prefer `true`/`false` in `.env` |
 
 Policy settings describe future execution: `keep_both` preserves conflicting contents; `replace_verified` allows replacement after verification; `keep` retains locally missing archive files; `confirm_each_run` requires an exact deletion-list approval. No policy executes file operations today. `allow_delete` makes a specific collection eligible and never approves a list or grants inherited deletion eligibility.
