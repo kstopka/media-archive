@@ -76,7 +76,7 @@ Stage 6 is complete. Isolated trials verified one fresh copy with each NTFS disk
 
 ## Stage 7 — Integration and controlled rollout
 
-- [ ] **7.1 End-to-end and failure scenarios.** IMPORT → SORT → manual selection → BACKUP → AUDIT → state restore. Test disconnections, source changes, capacity failures and publication/database crash windows. Distinguish automated results from agreed NTFS/exFAT/ADB and large-file tests; tool probes do not validate the application.
+- [ ] **7.1 End-to-end and failure scenarios.** IMPORT → SORT → manual selection → BACKUP → AUDIT → state restore. The automated suite exercises the full workflow with synthetic media and covers disconnections, source changes, capacity failures and publication/database crash windows. See [test coverage and hardware scope](development.md#end-to-end-verification).
 - [ ] **7.2 Operator instructions and first batch.** Document setup, initialization, progress/resume, recovery, conflict handling and attribute limits. Prepare a small production trial for explicit operator authorization; report completed checks and remaining limitations. Full archive audits remain separate local operations.
 
 ## Deferred features
