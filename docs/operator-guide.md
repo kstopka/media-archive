@@ -34,7 +34,7 @@ media-archive backup --yes --profile video --collection gopro --month 2025-01 --
 
 Monthly runs skip cleanup. In an All-scope run, eligible cleanup displays the exact files and asks for `USUŃ` in the terminal. Press Enter to decline. For the first batch, keep the local files and source originals. Check the exit code and the text or JSON report in `APP_REPORTS_DIR`. Expect `2/2` fresh copies for every file in this two-disk trial. The snapshot entries should show the same generation on both disks. Run `verify-snapshot GENERATION_DIRECTORY` for each generation directory reported under `APP_ARCHIVE_STATE_DIR` on those archive disks. Record the approved scope, copy results and snapshot validation totals. Keep reports and snapshot contents private. [BACKUP reports and evidence](backup-coordination.md#evidence-and-manual-space-release)
 
-The isolated NTFS BACKUP trials and the synthetic end-to-end tests passed. The first batch with production media awaits operator authorization. Run a full archive AUDIT separately when you intend to read the complete registered archive roots. [Verification scope](development.md#end-to-end-verification), [Full audit](audit.md#full-sha-256-audit)
+The first authorized production batch verified the two existing NTFS copies of every selected file and published the same validated snapshot on both archives. Transfer and database restore were exercised separately in isolated trials. Run a full archive AUDIT separately when you intend to read the complete registered archive roots. [Verification scope](development.md#end-to-end-verification), [Full audit](audit.md#full-sha-256-audit)
 
 ## Initial inventory, import and SORT
 

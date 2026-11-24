@@ -13,7 +13,7 @@ The workflow has four main operations.
 
 The CLI supports read-only configuration validation, [quick and full archive audits](docs/audit.md), the [initial inventory](docs/inventory.md), [phone baseline initialization](docs/phone-initialization.md), verified [camera card](docs/camera-import.md) and [phone](docs/phone-import.md) imports to staging, and [sorting](docs/sort.md). Python APIs provide [SQLite lifecycle and migrations](docs/state.md), [explicit configuration registration](docs/registration.md), [media history and initialization](docs/history.md), and [read-only local and Android source access](docs/sources.md).
 
-Use `backup --dry-run` to review a scope and `backup --yes` with explicit targets to run verified BACKUP and save state snapshots. Isolated trials passed on two NTFS disks. The first production batch awaits operator authorization. [Operator guide](docs/operator-guide.md#first-small-batch)
+Use `backup --dry-run` to review a scope and `backup --yes` with explicit targets to run verified BACKUP and save state snapshots. The first production batch verified two copies of each selected file and the same state snapshot on both NTFS archives. [Operator guide](docs/operator-guide.md#first-small-batch)
 
 ## Quick start
 
