@@ -1,4 +1,4 @@
-"""Execute controlled BACKUP trials against explicitly selected test targets."""
+"""Execute verified BACKUP against explicitly selected targets."""
 
 from collections.abc import Callable, Generator
 from concurrent.futures import ThreadPoolExecutor, wait
@@ -221,13 +221,23 @@ def _read_archive_copy(config: Configuration, group: str, copy: BackupCopy, stat
         return proof, ArchiveRead(entry, volume.mount_id, volume.physical_device)
 
 
-def execute_backup_trial(config: Configuration, *, profile_id: str, targets: tuple[str, ...],
-                         collection_id: str | None = None, month: str | None = None, pair: tuple[str, ...] = (),
-                         copy_if_elsewhere: bool = False, replace_test: bool = False,
-                         approve_cleanup: Approval | None = None, parallel_test: bool = False,
-                         snapshot_test: bool = False) -> BackupPlan:
+def execute_backup(config: Configuration, *, profile_id: str, targets: tuple[str, ...],
+                   collection_id: str | None = None, month: str | None = None, pair: tuple[str, ...] = (),
+                   copy_if_elsewhere: bool = False, approve_cleanup: Approval | None = None,
+                   announce: Callable[[str], None] = lambda _: None) -> BackupPlan:
+    """Run both change policies with mandatory state snapshots."""
+    return _execute_backup(config, profile_id=profile_id, targets=targets, collection_id=collection_id,
+                           month=month, pair=pair, copy_if_elsewhere=copy_if_elsewhere,
+                           approve_cleanup=approve_cleanup, snapshot_test=True, announce=announce)
+
+
+def _execute_backup(config: Configuration, *, profile_id: str, targets: tuple[str, ...],
+                    collection_id: str | None = None, month: str | None = None, pair: tuple[str, ...] = (),
+                    copy_if_elsewhere: bool = False, replace_test: bool = False,
+                    approve_cleanup: Approval | None = None, parallel_test: bool = False,
+                    snapshot_test: bool = False, announce: Callable[[str], None] = lambda _: None) -> BackupPlan:
     if not profile_id or not targets:
-        raise StateError("Próba BACKUP wymaga jawnego profilu i celów.")
+        raise StateError("BACKUP wymaga jawnego profilu i celów.")
     if approve_cleanup is not None and (month is not None or replace_test or parallel_test):
         raise StateError("Próba sprzątania wymaga zakresu Wszystko.")
     try:
@@ -247,7 +257,7 @@ def execute_backup_trial(config: Configuration, *, profile_id: str, targets: tup
         all_policies = fresh or approve_cleanup is not None
         plan = plan_backup(config, profile_id=profile_id, collection_id=collection_id, month=month,
                            targets=targets, pair=pair, prepare_replacements=replace_test or all_policies,
-                           coordination_trial=fresh)
+                           coordination_trial=fresh, announce=announce)
         if plan.code:
             return plan
         policy = "replace_verified" if replace_test else "keep_both"
@@ -255,13 +265,15 @@ def execute_backup_trial(config: Configuration, *, profile_id: str, targets: tup
         candidates = [copy for copy in plan.copies if copy.source in files]
         if not copy_if_elsewhere and any(copy.elsewhere for copy in candidates):
             return replace(plan, code=3, message=(
-                "Znaleziono historyczne kopie pod inną ścieżką. Sprawdź listę i ponów próbę z --copy-if-elsewhere."
+                "Znaleziono historyczne kopie pod inną ścieżką. Sprawdź listę i ponów BACKUP z --copy-if-elsewhere."
             ))
         recipients = ()
+        writable_targets = ()
         if snapshot_test:
             group = config.archive_group(profile.archive_group_id)
-            selected = {DeviceKey("archive", alias, group.id) for alias in plan.details["Wybrane cele"]
-                        if group.target(alias).state == "active"}
+            writable_targets = tuple(alias for alias in plan.details["Wybrane cele"]
+                                     if group.target(alias).state == "active")
+            selected = {DeviceKey("archive", alias, group.id) for alias in writable_targets}
             recipients, capacity, blocked = preflight_snapshots(config, selected, len(candidates))
             plan = replace(plan, details={**plan.details, "Pojemność snapshotów": capacity})
             if blocked:
@@ -324,6 +336,7 @@ def execute_backup_trial(config: Configuration, *, profile_id: str, targets: tup
                         row["dowód SHA-256"] = proof_id
             return outcomes
 
+        announce("BACKUP · weryfikacja i kopiowanie")
         if use_workers:
             with ThreadPoolExecutor(max_workers=2) as executor:
                 futures = [executor.submit(run_target, queue) for queue in queues.values()]
@@ -344,21 +357,21 @@ def execute_backup_trial(config: Configuration, *, profile_id: str, targets: tup
             rows, invalidated = _fresh_copy_status(config, profile.archive_group_id, files, outcomes)
             details["Stan kopii BACKUP"] = rows
             errors = errors or invalidated
-        elif snapshot_test and approve_cleanup is not None and not errors and not interrupted.is_set():
+        elif writable_targets and approve_cleanup is not None and not errors and not interrupted.is_set():
             _, invalidated = _fresh_copy_status(config, profile.archive_group_id, files, outcomes)
             errors = errors or invalidated
         if interrupted.is_set():
-            return replace(plan, code=130, message="Przerwano próbę BACKUP.", details=details)
+            return replace(plan, code=130, message="Przerwano BACKUP.", details=details)
         if snapshot_test:
             code = 3 if errors or space_failed.is_set() else 0
-            message = "Zakończono próbę BACKUP."
+            message = "Zakończono BACKUP."
             if space_failed.is_set():
                 message = "Zatrzymano transfery BACKUP na wszystkich celach. Brak miejsca."
             elif errors:
-                message = "Próba BACKUP zakończona częściowo."
-            elif approve_cleanup is not None:
+                message = "BACKUP zakończony częściowo."
+            elif writable_targets and approve_cleanup is not None:
                 try:
-                    code, message, cleanup = execute_cleanup(config, profile, collection_id, tuple(queues), plan.files,
+                    code, message, cleanup = execute_cleanup(config, profile, collection_id, writable_targets, plan.files,
                                                              approve_cleanup, locks)
                 except (ConfigError, StateError, OSError) as error:
                     code, message = 3, "Transfery ukończono. Sprzątanie zatrzymane."
@@ -367,6 +380,7 @@ def execute_backup_trial(config: Configuration, *, profile_id: str, targets: tup
                 details.update(cleanup)
             if code != 130:
                 assert settings is not None
+                announce("BACKUP · zapis snapshotów")
                 snapshots, failed = distribute_snapshot(config, recipients, settings)
                 details["Snapshoty BACKUP"] = snapshots
                 if failed:

@@ -32,22 +32,18 @@ Use `media-archive` or `python -m media_archive`. Put `--config FILE` before the
 | `search [--name TEXT] [--month YYYY-MM] [--source TYPE:PROFILE]` | Search [saved media locations](catalog.md#search). |
 | `conflicts [--keep-both GROUP]` | List [SORT conflicts](catalog.md#review-decisions) or save a review decision. |
 | `catalog-move ID ABSOLUTE_PATH` | Verify an [existing manual move](catalog.md#reconcile-a-manual-move) and update the catalog. |
-| `backup --append-test --profile ID --targets ALIAS ...` | Run an [isolated append-only backup trial](backup-append.md) with an explicit configuration. |
-| `backup --replace-test --profile ID --targets ALIAS ...` | Run an [isolated controlled replacement trial](backup-replacement.md) with an explicit configuration. |
-| `backup --cleanup-test --profile ID --targets ALIAS ...` | Run verified transfers and [review an exact archive cleanup list](backup-cleanup.md) with an explicit configuration. |
-| `backup --parallel-test --profile ID --targets ALIAS ...` | Run [coordinated transfers](backup-coordination.md) and report fresh copy evidence with an explicit configuration. |
-| `backup --snapshot-test --profile ID --targets ALIAS ...` | Run [BACKUP with snapshots](backup-snapshots.md) in an explicit test configuration. |
 | `backup --dry-run [--profile ID] [--targets ALIAS ...] [--pair ALIAS ALIAS] [--collection ID] [--month YYYY-MM]` | Preview [BACKUP scope, policies and capacity](backup-planning.md). |
+| `backup --yes --profile ID --targets ALIAS ... [--pair ALIAS ALIAS] [--collection ID] [--month YYYY-MM] [--copy-if-elsewhere]` | Run verified BACKUP and publish [state snapshots](backup-snapshots.md). An All-scope run prompts separately in an interactive terminal before any [eligible archive cleanup](backup-cleanup.md). |
 
 All commands that need existing state report a missing database as an error. Setup and migration use the [SQLite lifecycle](state.md#first-setup-and-upgrades). The configuration wizard is a separate planned feature. Camera import uses the [journal](journal.md) and [history](history.md).
 
 The [snapshot reference](snapshots.md) covers generation contents, filesystem effects and the reconciliation requirement.
 
-The recovery preview distinguishes a new attempt from an explicit takeover of an unfinished attempt. A takeover requires acquiring the operation's locks first. The preview reports the suggested action from the journal state.
+The recovery preview distinguishes a new attempt from an explicit takeover of an unfinished attempt. A takeover requires acquiring the operation's locks first. The preview reports the suggested action from the journal state. For an unfinished BACKUP, repeat `backup --yes` with the same configuration, profile, scope and intended targets so the command can verify the current destinations and recalculate capacity.
 
 ## Reports and exit status
 
-Setup, migration, audit, inventory, phone initialization, import, SORT, resume and reconciliation executions save one UTF-8 text/JSON pair per finished invocation after loading a valid configuration and checking output locations. Planning displays its result in the terminal. Add `--report` to a dry run to save the pair. A dry run makes no state, registration or media changes. If its report directory is under the state directory, producing that report may also create the parent directories.
+Setup, migration, audit, inventory, phone initialization, import, SORT, resume, BACKUP and reconciliation executions save one UTF-8 text/JSON pair per finished invocation after loading a valid configuration and checking output locations. Planning displays its result in the terminal. For commands that offer `--report`, add it to a dry run to save the pair. A dry run makes no state, registration or media changes. If its report directory is under the state directory, producing that report may also create the parent directories.
 
 State and report paths are checked against resolved collection roots, including collections reached through symbolic links. When a report is requested, the CLI rejects an existing non-directory or symbolic link at `APP_REPORTS_DIR` before setup or migration writes state.
 
@@ -60,7 +56,7 @@ Rotation checks the Media Archive format marker and requires the invocation ID a
 | 0 | Success or completed preview |
 | 1 | Execution error |
 | 2 | Invalid arguments or configuration |
-| 3 | Partial or blocked result. An audit, inventory, phone initialization, import, resume, reconciliation or SORT preview has pending work, a published database or snapshot could not be confirmed durable, or a completed execution could not save its report. |
+| 3 | Partial or blocked result, including an incomplete BACKUP, a published database or snapshot whose durability could not be confirmed, or a completed execution that could not save its report. |
 | 4 | Audit completed and detected differences in paths, attributes or full-mode SHA-256. |
 | 130 | Interrupted by the operator |
 

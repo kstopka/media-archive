@@ -1,16 +1,18 @@
-# BACKUP snapshot and recovery trial
+# BACKUP snapshots and recovery
 
-Use a test configuration, a separate state database and dedicated archive directories. Initialize a new test database with `media-archive --config fixture.env setup --yes`. To upgrade an existing test database, run `media-archive --config fixture.env migrate`.
+BACKUP requires an initialized database, an explicit profile and one or two selected targets. Use a separate configuration, database and archive directories when rehearsing. [Operator guide](operator-guide.md)
 
 ```sh
-media-archive --config fixture.env backup --snapshot-test --profile data --targets a b
+media-archive --config /example/settings.env backup --yes --profile data --targets a b
 ```
 
-The trial plans media transfers for the selected targets. It also budgets the snapshot on every connected, registered writable archive admitted at preflight, including archives outside the media selection. An unavailable snapshot budget on an admitted archive blocks the batch before media transfer. Archives configured for read-only access can still supply fresh evidence for an existing copy when selected.
+BACKUP plans media transfers for the selected targets. It also budgets the snapshot on every connected, registered writable archive admitted at preflight, including archives outside the media selection. An unavailable snapshot budget on an admitted archive blocks the batch before media transfer. Archives configured for read-only access can still supply fresh evidence for an existing copy when selected.
 
-After transfer results and any confirmed cleanup are committed, BACKUP creates one SQLite online backup with the configuration captured at the start. It publishes the same three files under `APP_ARCHIVE_STATE_DIR/snapshot-ID` at the root of each admitted volume. The default state directory is `.media-archive`, outside the data and audit roots. An interruption stops the trial. A completed partial media run still tries to save its recorded results.
+After transfer results and any confirmed cleanup are committed, BACKUP creates one SQLite online backup with the configuration captured at the start. It publishes the same three files under `APP_ARCHIVE_STATE_DIR/snapshot-ID` at the root of each admitted volume. The default state directory is `.media-archive`, outside the data and audit roots. An interruption stops the run. A completed partial media run still tries to save its recorded results.
 
-Each target stages, validates and synchronizes its generation before atomic publication. The trial rechecks available space with the actual generation size and keeps the required reserve. Rotation retains the new generation and up to four older valid generations. Invalid generations and unrelated files are preserved. Failure on one archive leaves the other archive's results available. The report records publication or failure per archive and returns exit code `3` for an incomplete run. The final check for manual space release runs after snapshot publication and verifies that the previously read copies and their local source are still current.
+Each target stages, validates and synchronizes its generation before atomic publication. BACKUP rechecks available space with the actual generation size and keeps the required reserve. Rotation retains the new generation and up to four older valid generations. Invalid generations and unrelated files are preserved. Failure on one archive leaves the other archive's results available. The report records publication or failure per archive and returns exit code `3` for an incomplete run. The final check for manual space release runs after snapshot publication and verifies that the previously read copies and their local source are still current.
+
+If the progress stream closes, BACKUP continues the run and saves snapshots and its final report through the usual paths.
 
 ## Restore and reconciliation
 

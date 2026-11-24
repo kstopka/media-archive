@@ -8,6 +8,7 @@ Current coverage includes the package and CLI, configuration, SQLite lifecycle, 
 
 | Document | Read it for |
 | --- | --- |
+| [operator-guide.md](operator-guide.md) | Set up a new installation, review a first batch and recover state |
 | [architecture.md](architecture.md) | Components, execution flow, ownership and implementation boundaries |
 | [configuration.md](configuration.md) | Model fields, `.env` schema, validation, public API and compatibility |
 | [identities.md](identities.md) | Stable IDs, display labels and the in-memory identity guard |
@@ -27,9 +28,9 @@ Current coverage includes the package and CLI, configuration, SQLite lifecycle, 
 | [import-recovery.md](import-recovery.md) | Resume a journaled import, reimport missing material and reconcile restored state |
 | [sort-planning.md](sort-planning.md) | Read capture dates, preview SORT paths and record a manual date |
 | [sort.md](sort.md) | Publish verified placements, preserve conflicts and recover interrupted moves |
-| [backup-append.md](backup-append.md) | Test append-only publication, disk-specific paths and recovery |
-| [backup-replacement.md](backup-replacement.md) | Test controlled replacement and recover interrupted publication |
-| [backup-cleanup.md](backup-cleanup.md) | Test confirmed removal of eligible archive files after verified transfers |
+| [backup-append.md](backup-append.md) | Append-only publication, disk-specific paths and recovery |
+| [backup-replacement.md](backup-replacement.md) | Controlled replacement and recovery after interrupted publication |
+| [backup-cleanup.md](backup-cleanup.md) | Confirm removal of eligible archive files after verified transfers |
 | [backup-coordination.md](backup-coordination.md) | Run two archive queues and check per-file evidence for manual space release |
 | [backup-snapshots.md](backup-snapshots.md) | Publish one BACKUP generation across archives and reconcile after restore |
 | [backup-planning.md](backup-planning.md) | Select a BACKUP profile and preview scope, targets and capacity |
@@ -91,10 +92,10 @@ These documents use neutral examples and do not depend on private planning notes
 | Phone import | Verified ADB import to staging, including completion of pending baseline processing |
 | SORT | Read-only preview, verified placement and cleanup, explicit date decisions and durable name conflicts |
 | Catalog | Search saved media locations, verify manual moves and review name conflicts |
-| BACKUP | Read-only [scope, target and capacity preview](backup-planning.md). Isolated trials support [append-only transfer](backup-append.md), [controlled replacement](backup-replacement.md), [confirmed cleanup](backup-cleanup.md), [two-target coordination](backup-coordination.md) and [snapshot publication and restore reconciliation](backup-snapshots.md). |
+| BACKUP | Preview [scope and capacity](backup-planning.md), then run `backup --yes` for verified transfers, [confirmed cleanup](backup-cleanup.md) and [state snapshots](backup-snapshots.md). |
 | Configuration wizard | Future enhancement; settings are currently edited in `.env` |
 
-The expected future pipeline is source → staging → SORT → local collection → manually invoked BACKUP. This explains existing configuration relationships; it is not an executable workflow yet. Future behavior must be marked as such throughout these documents.
+The operator runs IMPORT into staging, SORT into local collections and BACKUP to the selected archives as separate steps. The controlled rollout starts with a reviewed batch. [Operator guide](operator-guide.md)
 
 ## Documentation maintenance contract
 

@@ -62,10 +62,11 @@ Use synthetic data and temporary directories. Keep connected devices and the wor
 
 ## End-to-end verification
 
-The workflow suite uses a synthetic camera clip, temporary SQLite state and a test configuration. It runs CLI commands with real rsync, ExifTool and full SHA-256 reads. It simulates mounted devices at the Linux inspection boundary and skips the two workflow tests if rsync or ExifTool is unavailable.
+The workflow suite uses a synthetic camera clip, temporary SQLite state and a test configuration. It runs CLI commands with real rsync, ExifTool and full SHA-256 reads. It simulates mounted devices at the Linux inspection boundary and skips the workflow tests if rsync or ExifTool is unavailable.
 
 - The full workflow imports and sorts a clip, records a manual rename, and verifies that another import skips the same content. BACKUP uses the selected path, preserves archive-only material under the retention policy and puts the same snapshot on both targets. A full audit checks the archive content. After restore and reconciliation, the test checks the recovered catalog links and compares both archive copies byte for byte with the original.
 - The failure workflow interrupts IMPORT after publication and resumes with the card offline. It checks that a capacity failure blocks both archive targets before writing. It then disconnects one archive after snapshot preflight, expects a partial result, and retries to reach `2/2` fresh copies while preserving the first copy.
+- A closed progress stream after media transfer leaves snapshot publication and report writing available through their usual paths.
 - Focused suites cover source changes, process exit around publication, controlled replacements, confirmed deletions, month scopes and audit checkpoints. These tests exercise failure points using temporary files and simulated devices. [Test map](#test-map)
 
 Earlier sample trials separately verified camera import from exFAT, phone import and USB disconnect recovery over ADB, and BACKUP snapshot publication and restore on two NTFS archives. The complete workflow on physical devices and large-file runs remain untested. [exFAT camera trial](camera-import.md), [NTFS BACKUP trial](backup-snapshots.md#hardware-verification)

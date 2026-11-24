@@ -60,7 +60,7 @@ Paths below are relative to the repository root.
 | [import_recovery.py](../src/media_archive/import_recovery.py), [import_restore.py](../src/media_archive/import_restore.py) | Resume a saved import or reconcile staging and archive evidence after restore |
 | [metadata.py](../src/media_archive/metadata.py), [sort_planning.py](../src/media_archive/sort_planning.py) | Read embedded capture dates through ExifTool and preview a verified import's SORT destination |
 | [sort_execution.py](../src/media_archive/sort_execution.py), [sort_conflicts.py](../src/media_archive/sort_conflicts.py) | Journal executable SORT moves, preserve name conflicts and resume cleanup |
-| [backup_execution.py](../src/media_archive/backup_execution.py) | Coordinate per-disk BACKUP queues with the shared transfer and report fresh copy evidence |
+| [backup_execution.py](../src/media_archive/backup_execution.py) | Run verified per-disk BACKUP queues, publish state snapshots and report fresh copy evidence |
 | [backup_cleanup.py](../src/media_archive/backup_cleanup.py) | Verify an exact list of eligible archive removals after BACKUP transfer and confirm it per invocation |
 | [backup_snapshots.py](../src/media_archive/backup_snapshots.py), [backup_restore.py](../src/media_archive/backup_restore.py) | Publish and rotate BACKUP state generations and account for known archive paths after restore |
 | [backup_planning.py](../src/media_archive/backup_planning.py), [backup_capacity.py](../src/media_archive/backup_capacity.py) | Select archive targets and preview BACKUP scopes, policies and capacity |

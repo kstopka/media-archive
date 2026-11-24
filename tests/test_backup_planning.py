@@ -1,6 +1,6 @@
 """Read-only backup scope and target selection using synthetic volumes."""
 
-from contextlib import contextmanager, redirect_stderr, redirect_stdout
+from contextlib import chdir, contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import replace
 from datetime import datetime, timezone
 import errno
@@ -14,7 +14,7 @@ import shutil
 from unittest.mock import patch
 
 from media_archive.backup_planning import plan_backup
-from media_archive.backup_execution import _fresh_copy_status, execute_backup_trial
+from media_archive.backup_execution import _execute_backup, _fresh_copy_status, execute_backup
 from media_archive.backup_snapshots import _publish, _required, distribute_snapshot
 from media_archive._transfer_files import Destination, Part
 from media_archive.cli import main
@@ -165,7 +165,7 @@ class BackupPlanningTests(unittest.TestCase):
         self._archive_file("data", "a", "documents", "signed.pdf", b"old")
         group = self.config.archive_group("data")
         archive = group.target("a").mount / group.root_relative / self.config.collection("documents").archive_relative
-        command = ["backup", "--replace-test", "--profile", "data", "--collection", "documents", "--targets", "a"]
+        command = ["backup", "--yes", "--profile", "data", "--collection", "documents"]
 
         def copy_corrupted(part, source_fd):
             Path(f"/proc/self/fd/{part.directory}/copy").write_bytes(b"broken")
@@ -173,12 +173,13 @@ class BackupPlanningTests(unittest.TestCase):
         stderr = StringIO()
         with (redirect_stdout(StringIO()), redirect_stderr(stderr),
               patch("media_archive.transfer.verify_volume", side_effect=self._verify_volume),
+              patch("media_archive.backup_snapshots.verify_volume", side_effect=self._verify_volume),
               patch("media_archive.backup_execution.open_local_source", side_effect=self._backup_source),
               patch.object(Part, "rsync_from", copy_corrupted)):
             with self.assertRaises(SystemExit) as error:
                 main(command)
             self.assertEqual(error.exception.code, 2)
-            self.assertEqual(main(["--config", str(self.settings), *command]), 3)
+            self.assertEqual(main(["--config", str(self.settings), *command, "--targets", "a"]), 3)
         self.assertEqual((archive / "signed.pdf").read_bytes(), b"old")
 
     def test_month_menu_and_explicit_month_report_blocked_date_directories(self) -> None:
@@ -323,35 +324,35 @@ class BackupPlanningTests(unittest.TestCase):
     def _append(self, alias="a", **options):
         with (patch("media_archive.transfer.verify_volume", side_effect=self._verify_volume),
               patch("media_archive.backup_execution.open_local_source", side_effect=self._backup_source)):
-            return execute_backup_trial(self.config, profile_id="data", targets=(alias,), collection_id="photos", **options)
+            return _execute_backup(self.config, profile_id="data", targets=(alias,), collection_id="photos", **options)
 
     def _replace(self, collection_id="documents", targets=("a",)):
         with (patch("media_archive.transfer.verify_volume", side_effect=self._verify_volume),
               patch("media_archive.backup_execution.open_local_source", side_effect=self._backup_source)):
-            return execute_backup_trial(self.config, profile_id="data", targets=targets, collection_id=collection_id,
-                                  replace_test=True)
+            return _execute_backup(self.config, profile_id="data", targets=targets, collection_id=collection_id,
+                                   replace_test=True)
 
     def _cleanup(self, approve, targets=("a",), **options):
         with (patch("media_archive.transfer.verify_volume", side_effect=self._verify_volume),
               patch("media_archive.backup_cleanup.verify_volume", side_effect=self._verify_volume),
               patch("media_archive.backup_execution.open_local_source", side_effect=self._backup_source)):
-            return execute_backup_trial(self.config, profile_id="data", targets=targets, collection_id="photos",
-                                        approve_cleanup=approve, **options)
+            return _execute_backup(self.config, profile_id="data", targets=targets, collection_id="photos",
+                                   approve_cleanup=approve, **options)
 
     def _parallel(self, targets=("a", "b"), *, final_probe=None, collection_id="photos"):
         with (patch("media_archive.transfer.verify_volume", side_effect=self._verify_volume),
               patch("media_archive.backup_execution.verify_volume", side_effect=final_probe or self._verify_volume),
               patch("media_archive.backup_execution.open_local_source", side_effect=self._backup_source)):
-            return execute_backup_trial(self.config, profile_id="data", targets=targets, collection_id=collection_id,
-                                        parallel_test=True)
+            return _execute_backup(self.config, profile_id="data", targets=targets, collection_id=collection_id,
+                                   parallel_test=True)
 
-    def _snapshot_backup(self, targets=("a", "b"), collection_id="documents"):
+    def _snapshot_backup(self, targets=("a", "b"), collection_id="documents", approve_cleanup=None):
         with (patch("media_archive.transfer.verify_volume", side_effect=self._verify_volume),
               patch("media_archive.backup_execution.verify_volume", side_effect=self._verify_volume),
               patch("media_archive.backup_execution.open_local_source", side_effect=self._backup_source),
               patch("media_archive.backup_snapshots.verify_volume", side_effect=self._verify_volume)):
-            return execute_backup_trial(self.config, profile_id="data", targets=targets,
-                                        collection_id=collection_id, snapshot_test=True)
+            return execute_backup(self.config, profile_id="data", targets=targets, collection_id=collection_id,
+                                  approve_cleanup=approve_cleanup)
 
     def _snapshot_root(self, alias):
         return self.config.archive_group("data").target(alias).mount / self.config.app.archive_state_dir
@@ -407,11 +408,11 @@ class BackupPlanningTests(unittest.TestCase):
         self.assertFalse((root / first_name).exists())
         self.assertEqual((foreign / "keep").read_bytes(), b"foreign")
 
-    def test_snapshot_backup_cli_creates_generation_at_archive_root(self) -> None:
-        with (redirect_stdout(StringIO()), redirect_stderr(StringIO()),
+    def test_backup_cli_uses_default_config_and_creates_generation_at_archive_root(self) -> None:
+        (self.root / ".env").write_bytes(self.settings.read_bytes())
+        with (chdir(self.root), redirect_stdout(StringIO()), redirect_stderr(StringIO()),
               patch("media_archive.backup_snapshots.verify_volume", side_effect=self._verify_volume)):
-            code = main(["--config", str(self.settings), "backup", "--snapshot-test",
-                         "--profile", "data", "--targets", "a", "--collection", "documents"])
+            code = main(["backup", "--yes", "--profile", "data", "--targets", "a", "--collection", "documents"])
         self.assertEqual(code, 0)
         generation, = self._snapshot_root("a").iterdir()
         self.assertEqual(generation.name, f"snapshot-{validate_snapshot(generation).generation_id}")
@@ -947,23 +948,66 @@ class BackupPlanningTests(unittest.TestCase):
         self.assertEqual(unreadable.code, 3, unreadable.details)
         self.assertEqual((root / "old.jpg").read_bytes(), b"old")
 
-    def test_cleanup_cli_declines_without_terminal_and_rejects_month_scope(self) -> None:
+    def test_backup_cli_skips_monthly_cleanup_and_declines_without_terminal(self) -> None:
         self._archive_file("data", "a", "review", "old.jpg", b"old")
         group = self.config.archive_group("data")
         archived = (group.target("a").mount / group.root_relative
                     / self.config.collection("review").archive_relative / "old.jpg")
-        args = ["--config", str(self.settings), "backup", "--cleanup-test",
+        args = ["--config", str(self.settings), "backup", "--yes",
                 "--profile", "data", "--collection", "photos", "--targets", "a"]
         output = StringIO()
         with (redirect_stdout(output), redirect_stderr(StringIO()),
               patch("media_archive.cli.sys.stdin", StringIO("USUŃ\n")),
+              patch("media_archive.backup_snapshots.verify_volume", side_effect=self._verify_volume),
               patch("media_archive.backup_cleanup.verify_volume", side_effect=self._verify_volume)):
-            with self.assertRaises(SystemExit) as error:
-                main([*args, "--month", "2025-02"])
-            self.assertEqual(error.exception.code, 2)
+            with patch("media_archive.backup_execution.execute_cleanup") as cleanup:
+                self.assertEqual(main([*args, "--month", "2025-02"]), 0)
+                cleanup.assert_not_called()
             self.assertEqual(main(args), 0)
         self.assertIn("old.jpg", output.getvalue())
         self.assertEqual(archived.read_bytes(), b"old")
+
+    def test_backup_checks_read_only_copy_without_proposing_cleanup_on_its_disk(self) -> None:
+        self.connected.add(("data", "b"))
+        self._file("review", "live.jpg", b"live")
+        group = self.config.archive_group("data")
+        review = Path(group.root_relative) / self.config.collection("review").archive_relative
+        for alias in ("a", "b"):
+            self._archive_file("data", alias, "review", "live.jpg", b"live")
+            self._archive_file("data", alias, "review", "obsolete.jpg", b"old")
+        self.assertEqual(self._parallel().code, 0)
+        settings = self.settings.read_text(encoding="utf-8")
+        self.settings.write_text(settings.replace("ARCHIVE_DATA_TARGET_B_STATE='active'",
+                                                   "ARCHIVE_DATA_TARGET_B_STATE='read_only'"), encoding="utf-8")
+        self.config = load_config(self.settings)
+
+        original = self.database.read_bytes()
+        output = StringIO()
+        with redirect_stdout(output), redirect_stderr(StringIO()):
+            code = main(["--config", str(self.settings), "backup", "--dry-run", "--profile", "data",
+                         "--collection", "photos", "--targets", "a", "b"])
+        self.assertEqual(code, 0, output.getvalue())
+        self.assertIn("data/b · tylko do odczytu", output.getvalue())
+        self.assertEqual(self.database.read_bytes(), original)
+        preview = plan_backup(self.config, profile_id="data", collection_id="photos", targets=("a", "b"))
+        self.assertEqual([(copy.target, copy.action) for copy in preview.copies], [("a", "verified"), ("b", "check")])
+        self.assertEqual([row["cel"] for row in preview.details["Pojemność BACKUP"]], ["a"])
+        automatic = plan_backup(self.config, profile_id="data", collection_id="photos")
+        self.assertEqual(automatic.details["Wybrane cele"], ["a"])
+
+        def approve(items):
+            self.assertEqual([(item.target, item.path.name) for item in items], [("a", "obsolete.jpg")])
+            return True
+
+        with (patch("media_archive.backup_cleanup.verify_volume", side_effect=self._verify_volume),
+              patch.object(Part, "rsync_from", side_effect=AssertionError("Both live copies already exist"))):
+            result = self._snapshot_backup(collection_id="photos", approve_cleanup=approve)
+        self.assertEqual(result.code, 0, result.details)
+        state, = result.details["Stan kopii BACKUP"]
+        self.assertEqual(state["status kopii"], "2/2")
+        self.assertFalse((group.target("a").mount / review / "obsolete.jpg").exists())
+        self.assertEqual((group.target("b").mount / review / "obsolete.jpg").read_bytes(), b"old")
+        self.assertFalse(self._snapshot_root("b").exists())
 
     @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
     def test_replacement_uses_effective_policy_and_records_new_proof_per_disk(self) -> None:
@@ -1180,6 +1224,12 @@ class BackupPlanningTests(unittest.TestCase):
         with patch.object(Part, "publish", publish_then_interrupt):
             interrupted = self._append()
         self.assertEqual(interrupted.code, 130, interrupted.details)
+        outcome, = interrupted.details["Wyniki BACKUP"]
+        with open_database(self.database) as connection:
+            operation, = journal.load_unfinished(connection)
+            self.assertEqual(operation.operation_key.split(":", 1)[0], "backup")
+            self.assertEqual(journal.backup_retry_command(operation), "backup --yes")
+        self.assertEqual(outcome["wynik"], "przerwano")
         with patch.object(Part, "rsync_from", side_effect=AssertionError("plik jest już opublikowany")):
             resumed = self._append()
         self.assertEqual(resumed.code, 0, resumed.details)

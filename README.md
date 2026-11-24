@@ -2,7 +2,7 @@
 
 A local Linux CLI for importing, organizing, and archiving photos, videos, and documents. Paths, devices, collections and backup policies are configured in a private `.env` file.
 
-The planned workflow keeps four operations separate:
+The workflow has four main operations.
 
 - **IMPORT** — copy media to staging while preserving source originals.
 - **SORT** — organize verified imports into local collections.
@@ -13,7 +13,7 @@ The planned workflow keeps four operations separate:
 
 The CLI supports read-only configuration validation, [quick and full archive audits](docs/audit.md), the [initial inventory](docs/inventory.md), [phone baseline initialization](docs/phone-initialization.md), verified [camera card](docs/camera-import.md) and [phone](docs/phone-import.md) imports to staging, and [sorting](docs/sort.md). Python APIs provide [SQLite lifecycle and migrations](docs/state.md), [explicit configuration registration](docs/registration.md), [media history and initialization](docs/history.md), and [read-only local and Android source access](docs/sources.md).
 
-BACKUP supports preview and isolated trials with integrated snapshots and recovery. The trials passed on two NTFS disks using a synthetic file and a separate database. The first production batch is planned as part of the controlled rollout. [BACKUP snapshot trial](docs/backup-snapshots.md#hardware-verification)
+Use `backup --dry-run` to review a scope and `backup --yes` with explicit targets to run verified BACKUP and save state snapshots. Isolated trials passed on two NTFS disks. The first production batch awaits operator authorization. [Operator guide](docs/operator-guide.md#first-small-batch)
 
 ## Quick start
 
@@ -55,14 +55,15 @@ Setup creates `state.sqlite3` in `APP_STATE_DIR`. The [CLI reference](docs/cli.m
 ## Documentation
 
 - [Technical documentation](docs/README.md) — feature index and starting point for developers.
+- [Operator guide](docs/operator-guide.md) — setup, first backup, and recovery.
 - [Roadmap and planned designs](docs/README.md#roadmap-and-planned-designs) — implementation stages and future workflows.
 - [Import recovery](docs/import-recovery.md) — resume an interrupted import, reimport missing staging material or reconcile after restore.
 - [SORT](docs/sort.md) — preview, place and recover verified media imports.
 - [BACKUP preview](docs/backup-planning.md) — select a profile and check its scope and policies.
-- [BACKUP replacement trial](docs/backup-replacement.md) — verify and atomically replace files in a test archive.
-- [BACKUP cleanup trial](docs/backup-cleanup.md) — review and confirm eligible archive removals.
-- [BACKUP coordination trial](docs/backup-coordination.md) — check per-disk transfer results and fresh copy evidence.
-- [BACKUP snapshot trial](docs/backup-snapshots.md) — distribute, verify and restore BACKUP state.
+- [BACKUP replacement](docs/backup-replacement.md) — verify and atomically replace files where policy permits.
+- [BACKUP cleanup](docs/backup-cleanup.md) — review and confirm eligible archive removals.
+- [BACKUP coordination](docs/backup-coordination.md) — check per-disk transfer results and fresh copy evidence.
+- [BACKUP snapshots](docs/backup-snapshots.md) — distribute, verify and restore BACKUP state.
 - [Catalog](docs/catalog.md) — find saved locations, review conflicts and verify manual moves.
 - [Configuration](docs/configuration.md) — settings, models, validation and compatibility.
 - [Architecture](docs/architecture.md) — modules and execution flow.

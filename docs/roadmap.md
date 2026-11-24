@@ -2,7 +2,7 @@
 
 This public roadmap tracks project milestones. Checkboxes mark completed milestones. For currently available behavior, see the [technical documentation](README.md).
 
-The CLI, configuration loader, SQLite lifecycle, persistent registration and [history APIs](history.md) are available. The CLI supports camera and phone import, SORT, catalog search, read-only BACKUP scope preview and isolated BACKUP trials with snapshots and recovery. The BACKUP stage passed hardware verification on NTFS. The first production batch is part of the controlled rollout. The configuration wizard remains planned. See the [SQLite state reference](state.md).
+The CLI, configuration loader, SQLite lifecycle, persistent registration and [history APIs](history.md) are available. The CLI supports camera and phone import, SORT, catalog search and BACKUP with scope preview, verified transfers and snapshots. Isolated BACKUP verification passed on NTFS. The first production batch is part of the controlled rollout. The configuration wizard remains planned. See the [SQLite state reference](state.md).
 
 Design references: [archive workflows and state](design/archive-workflows.md) and [future configurator](design/configurator.md). Future module boundaries, database details and command syntax must be finalized during the relevant implementation task.
 
@@ -66,18 +66,18 @@ Target planning must persist each material occurrence's required pair. An explic
 
 - [x] **6.1 Scope and policies.** Use the [scope preview](backup-planning.md) to identify/select connected targets and propose a matching profile. Profile All includes assigned roots; collection All includes its complete tree. Month scopes combine configured dated roots and appear only for work pending on selected connected targets. Plain collections have no month submenu.
 - [x] **6.2 Targets and capacity.** [Validate](backup-planning.md#capacity-of-the-whole-batch) independent disks and preflight the entire selected batch, including temporary files, replacements, snapshots and at least 1 GiB reserve. Insufficient space on any selected available target blocks the whole batch before transfer or cleanup.
-- [x] **6.3 Append policies.** Use the [isolated append trial](backup-append.md) to verify each required path/target independently. Skip current verified copies, preserve conflicting contents and intentional copies under different paths; never move historical archive copies automatically.
-- [x] **6.4 Controlled replacement.** The [isolated replacement trial](backup-replacement.md) applies only where policy permits it. It verifies new content before atomic publication and records fresh evidence.
-- [x] **6.5 Confirmed deletions.** The [isolated cleanup trial](backup-cleanup.md) requires All scope, explicit collection permission, exact per-target approval and fresh state validation. Missing sources, scan failures and changes after approval block cleanup.
-- [x] **6.6 Two-target coordination.** The [isolated coordination trial](backup-coordination.md) runs one queue per target, keeps successful copies and stops both queues on space exhaustion. It reports per-file copy counts and checks fresh evidence for manual space release.
-- [x] **6.7 Snapshot/recovery integration.** The [BACKUP snapshot trial](backup-snapshots.md) publishes one verified generation to admitted writable archives, keeps up to five valid generations per disk and reconciles known archive paths and pending operations after restore.
+- [x] **6.3 Append policies.** Verify each required path independently on each target. Reuse matching copies and preserve conflicting contents and intentional copies under different paths. [Append policies](backup-append.md)
+- [x] **6.4 Controlled replacement.** Verify new content before atomic publication and record fresh evidence where policy allows replacement. [Replacement](backup-replacement.md)
+- [x] **6.5 Confirmed deletions.** Require All scope, collection permission, exact per-target approval and fresh state validation. Missing sources, scan failures and changes after approval block cleanup. [Cleanup](backup-cleanup.md)
+- [x] **6.6 Two-target coordination.** Run one queue per target, keep successful copies and stop both queues on space exhaustion. Report per-file copy counts and fresh evidence for manual space release. [Coordination](backup-coordination.md)
+- [x] **6.7 Snapshot/recovery integration.** Publish one verified generation to admitted writable archives, keep up to five valid generations per disk and reconcile known archive paths and pending operations after restore. [Snapshots and recovery](backup-snapshots.md)
 
-Stage 6 is complete. Isolated trials verified one fresh copy with each NTFS disk connected on its own, two fresh copies with both connected, the same snapshot generation on both disks, and recovery of the test database. The end-to-end workflow and first authorized production batch remain Stage 7 milestones. [Hardware verification](backup-snapshots.md#hardware-verification)
+Stage 6 is complete. Isolated trials verified one fresh copy with each NTFS disk connected on its own, two fresh copies with both connected, the same snapshot generation on both disks, and recovery of the test database. [Hardware verification](backup-snapshots.md#hardware-verification)
 
 ## Stage 7 — Integration and controlled rollout
 
-- [ ] **7.1 End-to-end and failure scenarios.** IMPORT → SORT → manual selection → BACKUP → AUDIT → state restore. The automated suite exercises the full workflow with synthetic media and covers disconnections, source changes, capacity failures and publication/database crash windows. See [test coverage and hardware scope](development.md#end-to-end-verification).
-- [ ] **7.2 Operator instructions and first batch.** Document setup, initialization, progress/resume, recovery, conflict handling and attribute limits. Prepare a small production trial for explicit operator authorization; report completed checks and remaining limitations. Full archive audits remain separate local operations.
+- [x] **7.1 End-to-end and failure scenarios.** IMPORT → SORT → manual selection → BACKUP → AUDIT → state restore. The automated suite exercises the workflow with synthetic media and covers disconnections, source changes, capacity failures and publication/database crash windows. [Test coverage and hardware scope](development.md#end-to-end-verification)
+- [ ] **7.2 Operator instructions and first batch.** The guide covers setup, initialization, progress, recovery, conflicts and attribute limits. The first small batch with `backup --yes` awaits explicit operator authorization. [Operator guide](operator-guide.md#first-small-batch)
 
 ## Deferred features
 

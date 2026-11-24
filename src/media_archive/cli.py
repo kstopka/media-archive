@@ -10,7 +10,7 @@ import sys
 from media_archive import operations
 from media_archive.audit import quick_audit
 from media_archive.backup_cleanup import Removal
-from media_archive.backup_execution import backup_retry_command, execute_backup_trial
+from media_archive.backup_execution import backup_retry_command, execute_backup
 from media_archive.backup_planning import plan_backup
 from media_archive.camera_import import import_camera
 from media_archive.catalog import keep_both, list_conflicts, record_manual_move, search_catalog
@@ -47,6 +47,14 @@ def _confirm_cleanup(removals: tuple[Removal, ...]) -> bool:
         print(json.dumps(item.report(), ensure_ascii=False), file=sys.stderr)
     print("Wpisz USUŃ, aby zatwierdzić tę listę, lub naciśnij Enter, aby odmówić.", file=sys.stderr, flush=True)
     return sys.stdin.readline().strip() == "USUŃ"
+
+
+def _announce_backup(message: str) -> None:
+    try:
+        print(message, file=sys.stderr, flush=True)
+    except OSError:
+        # Progress output must not interrupt snapshot publication or reporting.
+        pass
 
 
 def _device_key(value: str) -> DeviceKey:
@@ -149,7 +157,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="media-archive",
         description="Lokalne narzędzie do importu, porządkowania i archiwizacji mediów.",
-        epilog="Dostępny jest AUDIT, pierwszy spis, import, SORT i podgląd zakresu BACKUP.",
+        epilog="Dostępny jest AUDIT, pierwszy spis, IMPORT, SORT i BACKUP ze snapshotami.",
     )
     parser.add_argument("--config", metavar="PLIK", help="plik konfiguracji (domyślnie .env)")
     parser.add_argument("--check-config", action="store_true", help="sprawdź sam plik konfiguracji")
@@ -200,16 +208,10 @@ def _parser() -> argparse.ArgumentParser:
     move = commands.add_parser("catalog-move", help="uzgodnij wykonaną ręcznie zmianę lokalizacji")
     move.add_argument("occurrence_id", type=_operation_id, metavar="ID_LOKALIZACJI")
     move.add_argument("target", type=Path, metavar="NOWA_ŚCIEŻKA")
-    backup = commands.add_parser("backup", help="pokaż profil, zakres i polityki BACKUP")
+    backup = commands.add_parser("backup", help="planuj lub wykonaj BACKUP ze snapshotami")
     backup_mode = backup.add_mutually_exclusive_group(required=True)
     backup_mode.add_argument("--dry-run", action="store_true", help="tylko odczyt i podgląd zakresu")
-    backup_mode.add_argument("--append-test", action="store_true", help="wykonaj próbę dopisywania w konfiguracji testowej")
-    backup_mode.add_argument("--replace-test", action="store_true", help="wykonaj próbę podmiany w konfiguracji testowej")
-    backup_mode.add_argument("--cleanup-test", action="store_true", help="wykonaj transfery i zapytaj o usunięcia w próbie")
-    backup_mode.add_argument("--parallel-test", action="store_true",
-                             help="sprawdź koordynację celów i świeże dowody kopii")
-    backup_mode.add_argument("--snapshot-test", action="store_true",
-                             help="wykonaj próbę BACKUP ze snapshotami na archiwach")
+    backup_mode.add_argument("--yes", action="store_true", help="wykonaj BACKUP i zapisz snapshoty stanu")
     backup.add_argument("--copy-if-elsewhere", action="store_true",
                         help="zatwierdź nową kopię mimo zapisanej kopii pod inną ścieżką")
     backup.add_argument("--profile", metavar="PROFIL")
@@ -246,12 +248,10 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if args.command == "restore" and (args.config is None or not args.yes):
         parser.error("Użyj --config PLIK restore GENERACJA --yes.")
     if args.command == "backup":
-        if not args.dry_run and (args.config is None or args.profile is None or not args.targets):
-            parser.error("Próba zapisu wymaga --config PLIK, --profile PROFIL i --targets CEL.")
+        if args.yes and (args.profile is None or not args.targets):
+            parser.error("BACKUP --yes wymaga --profile PROFIL i --targets CEL.")
         if args.copy_if_elsewhere and args.dry_run:
-            parser.error("--copy-if-elsewhere wymaga trybu próby zapisu BACKUP.")
-        if args.cleanup_test and args.month is not None:
-            parser.error("--cleanup-test wymaga zakresu Wszystko bez --month.")
+            parser.error("--copy-if-elsewhere wymaga BACKUP --yes.")
     if args.command in ("import", "resume") and (args.card is None) != (args.mount is None):
         parser.error("Import z karty wymaga jednocześnie --card i --mount.")
     if args.command == "audit":
@@ -292,6 +292,10 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     except StateError as error:
         print(f"Błąd wykonania: {error}", file=sys.stderr)
         return 1
+
+    def announce(message: str) -> None:
+        print(message, file=sys.stderr, flush=True)
+
     try:
         code = 0
         if args.command == "setup":
@@ -334,9 +338,6 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                                        announce=lambda message: print(message, file=sys.stderr, flush=True))
             code, message, details = outcome.code, outcome.message, outcome.details
         elif args.command == "import":
-            def announce(message: str) -> None:
-                print(message, file=sys.stderr, flush=True)
-
             if dry_run:
                 plan = plan_import(config, args.source, card=args.card, mount=args.mount, reimport=args.reimport,
                                    announce=announce)
@@ -402,15 +403,12 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         elif args.command == "backup":
             selection = dict(profile_id=args.profile, collection_id=args.collection, month=args.month,
                              targets=tuple(args.targets or ()), pair=tuple(args.pair or ()))
-            if not dry_run:
-                outcome = execute_backup_trial(config, **selection, copy_if_elsewhere=args.copy_if_elsewhere,
-                                               replace_test=args.replace_test,
-                                               approve_cleanup=_confirm_cleanup
-                                               if args.cleanup_test or (args.snapshot_test and args.month is None) else None,
-                                               parallel_test=args.parallel_test, snapshot_test=args.snapshot_test)
+            if args.yes:
+                outcome = execute_backup(config, **selection, copy_if_elsewhere=args.copy_if_elsewhere,
+                                         approve_cleanup=_confirm_cleanup if args.month is None else None,
+                                         announce=_announce_backup)
             else:
-                outcome = plan_backup(config, **selection,
-                                      announce=lambda message: print(message, file=sys.stderr, flush=True))
+                outcome = plan_backup(config, **selection, prepare_replacements=True, announce=_announce_backup)
             code, message, details = outcome.code, outcome.message, outcome.details
         elif args.command == "reconcile":
             try:

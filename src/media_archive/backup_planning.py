@@ -279,7 +279,7 @@ def plan_backup(config: Configuration, *, profile_id: str | None = None, collect
     with installation_lock(database), ExitStack() as stack:
         validate_registered_configuration(config)
         connected, target_status = _probe_targets(config, stack, {item.archive_group_id for item in profiles}, targets,
-                                                  include_read_only=coordination_trial)
+                                                  include_read_only=coordination_trial or bool(targets))
         matching = tuple(profile for profile in profiles if connected[profile.archive_group_id])
         details: dict[str, object] = {"Profile BACKUP": [item.id for item in matching], "Cele BACKUP": target_status}
         if not matching:

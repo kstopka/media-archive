@@ -80,7 +80,7 @@ class ArchiveWorkflowTests(unittest.TestCase):
         return self._cli("import", "--source", "hero8", "--card", "a", "--mount", self.card, expected=expected)
 
     def _backup(self, *, expected=0):
-        return self._cli("backup", "--snapshot-test", "--profile", "video", "--collection", "gopro",
+        return self._cli("backup", "--yes", "--profile", "video", "--collection", "gopro",
                          "--targets", "a", "b", expected=expected)
 
     def _archive_copy(self, alias, source):
@@ -193,3 +193,31 @@ class ArchiveWorkflowTests(unittest.TestCase):
         for alias in self.targets:
             self.assertEqual(self._archive_copy(alias, self.placed).read_bytes(), self.original)
         self.assertEqual(self.placed.read_bytes(), self.movie.read_bytes())
+
+    def test_backup_publishes_snapshots_and_report_when_progress_stream_closes(self) -> None:
+        self._import()
+        self._cli("sort")
+        reports = self.config.app.reports_dir
+        before = set(reports.glob("*/report.json"))
+
+        class ClosedProgressStream(StringIO):
+            failed = False
+
+            def write(self, text: str) -> int:
+                if "zapis snapshotów" in text:
+                    self.failed = True
+                    raise BrokenPipeError("closed progress stream")
+                return super().write(text)
+
+        progress = ClosedProgressStream()
+        with redirect_stdout(StringIO()), redirect_stderr(progress):
+            code = main(["--config", str(self.settings), "backup", "--yes", "--profile", "video",
+                         "--collection", "gopro", "--month", "2025-01", "--targets", "a", "b"])
+        self.assertTrue(progress.failed)
+        self.assertEqual(code, 0)
+        report, = set(reports.glob("*/report.json")) - before
+        details = json.loads(report.read_text(encoding="utf-8"))["szczegóły"]
+        self.assertEqual(details["Stan kopii BACKUP"][0]["status kopii"], "2/2")
+        self.assertEqual({row["cel"] for row in details["Snapshoty BACKUP"]}, {"a", "b"})
+        for row in details["Snapshoty BACKUP"]:
+            self._cli("verify-snapshot", self._snapshot_root(row["cel"]) / row["generacja"])

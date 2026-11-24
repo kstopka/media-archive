@@ -48,10 +48,8 @@ BACKUP_REPLACE_PREFIX = "backup:replace:"
 
 
 def backup_retry_command(operation: RowMapping) -> str | None:
-    if operation.operation_key.startswith(BACKUP_REPLACE_PREFIX):
-        return "backup --replace-test"
     if operation.operation_key.startswith("backup:"):
-        return "backup --append-test"
+        return "backup --yes"
     return None
 
 
