@@ -13,7 +13,7 @@ import stat
 import subprocess
 
 from media_archive.devices import MountedVolume, _mount_id, _open_root
-from media_archive.sources import SourceDigest
+from media_archive.sources import SourceDigest, SourceEntry
 from media_archive.state import StateError
 
 _WORK_NAME = re.compile(r"\.media-archive-transfer-[0-9a-f]{32}", re.IGNORECASE)
@@ -116,6 +116,14 @@ class Destination:
         except FileNotFoundError:
             return
         raise TransferConflict("Plik docelowy już istnieje. Pozostawiono go bez zmian.")
+
+    def sync_absence(self) -> None:
+        """Confirm a removed path and synchronize its surviving directories."""
+        with self._parents(nearest=True) as directories:
+            self.ensure_absent()
+            for directory in reversed(directories):
+                os.fsync(directory)
+            self.ensure_absent()
 
     def preflight(self, *, allow_existing: bool = False) -> tuple[Path, ...]:
         """Check the writable directory for the next creation and list missing parents."""
@@ -236,7 +244,8 @@ class Destination:
         except FileNotFoundError:
             raise StateError("Brak gotowej kopii SORT. Pozostawiono kopię roboczą.") from None
 
-    def remove_verified(self, expected: SourceDigest, before_remove: Callable[[], None]) -> None:
+    def remove_verified(self, expected: SourceDigest, before_remove: Callable[[], None], *,
+                        approved_entry: SourceEntry | None = None) -> None:
         """Unlink an owned copy only while its pinned content and directory still match."""
         try:
             with self.parent() as parent:
@@ -247,13 +256,22 @@ class Destination:
                         actual = os.stat(self.path.name, dir_fd=parent, follow_symlinks=False)
                         if digest != expected or _signature(actual) != _signature(status):
                             raise StateError("Kopia robocza uległa zmianie. Pozostawiono ją na miejscu.")
+                        if approved_entry is not None and SourceEntry.from_stat(approved_entry.path, actual) != approved_entry:
+                            raise TransferConflict("Zatwierdzony plik archiwalny zmienił się przed usunięciem.")
                         before_remove()
+                        self.check_parent(parent)
+                        if _signature(os.stat(self.path.name, dir_fd=parent, follow_symlinks=False)) != _signature(status):
+                            raise TransferConflict("Plik zmienił się bezpośrednio przed usunięciem.")
                         os.unlink(self.path.name, dir_fd=parent)
                 except FileNotFoundError:
                     self.ensure_absent()
+                    if approved_entry is not None:
+                        raise TransferConflict("Zatwierdzony plik archiwalny zniknął przed usunięciem.") from None
                 self.check_parent(parent, sync=True)
         except FileNotFoundError:
             self.ensure_absent()
+            if approved_entry is not None:
+                raise TransferConflict("Zatwierdzony katalog archiwalny zniknął przed usunięciem.") from None
 
 
 @contextmanager

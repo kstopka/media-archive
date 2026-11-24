@@ -3,11 +3,13 @@
 import argparse
 from collections.abc import Sequence
 from datetime import date
+import json
 from pathlib import Path
 import sys
 
 from media_archive import operations
 from media_archive.audit import quick_audit
+from media_archive.backup_cleanup import Removal
 from media_archive.backup_execution import backup_retry_command, execute_backup_trial
 from media_archive.backup_planning import plan_backup
 from media_archive.camera_import import import_camera
@@ -35,6 +37,16 @@ def _operation_id(value: str) -> int:
     if not 0 < number <= 2**63 - 1:
         raise argparse.ArgumentTypeError("ID operacji musi być dodatnią liczbą całkowitą.")
     return number
+
+
+def _confirm_cleanup(removals: tuple[Removal, ...]) -> bool:
+    if not (sys.stdin.isatty() and sys.stderr.isatty()):
+        return False
+    print("Pliki archiwalne do usunięcia", file=sys.stderr)
+    for item in removals:
+        print(json.dumps(item.report(), ensure_ascii=False), file=sys.stderr)
+    print("Wpisz USUŃ, aby zatwierdzić tę listę, lub naciśnij Enter, aby odmówić.", file=sys.stderr, flush=True)
+    return sys.stdin.readline().strip() == "USUŃ"
 
 
 def _device_key(value: str) -> DeviceKey:
@@ -193,6 +205,7 @@ def _parser() -> argparse.ArgumentParser:
     backup_mode.add_argument("--dry-run", action="store_true", help="tylko odczyt i podgląd zakresu")
     backup_mode.add_argument("--append-test", action="store_true", help="wykonaj próbę dopisywania w konfiguracji testowej")
     backup_mode.add_argument("--replace-test", action="store_true", help="wykonaj próbę podmiany w konfiguracji testowej")
+    backup_mode.add_argument("--cleanup-test", action="store_true", help="wykonaj transfery i zapytaj o usunięcia w próbie")
     backup.add_argument("--copy-if-elsewhere", action="store_true",
                         help="zatwierdź nową kopię mimo zapisanej kopii pod inną ścieżką")
     backup.add_argument("--profile", metavar="PROFIL")
@@ -229,10 +242,12 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if args.command == "restore" and (args.config is None or not args.yes):
         parser.error("Użyj --config PLIK restore GENERACJA --yes.")
     if args.command == "backup":
-        if (args.append_test or args.replace_test) and (args.config is None or args.profile is None or not args.targets):
+        if not args.dry_run and (args.config is None or args.profile is None or not args.targets):
             parser.error("Próba zapisu wymaga --config PLIK, --profile PROFIL i --targets CEL.")
-        if args.copy_if_elsewhere and not (args.append_test or args.replace_test):
-            parser.error("--copy-if-elsewhere wymaga --append-test albo --replace-test.")
+        if args.copy_if_elsewhere and args.dry_run:
+            parser.error("--copy-if-elsewhere wymaga trybu próby zapisu BACKUP.")
+        if args.cleanup_test and args.month is not None:
+            parser.error("--cleanup-test wymaga zakresu Wszystko bez --month.")
     if args.command in ("import", "resume") and (args.card is None) != (args.mount is None):
         parser.error("Import z karty wymaga jednocześnie --card i --mount.")
     if args.command == "audit":
@@ -383,9 +398,10 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         elif args.command == "backup":
             selection = dict(profile_id=args.profile, collection_id=args.collection, month=args.month,
                              targets=tuple(args.targets or ()), pair=tuple(args.pair or ()))
-            if args.append_test or args.replace_test:
+            if not dry_run:
                 outcome = execute_backup_trial(config, **selection, copy_if_elsewhere=args.copy_if_elsewhere,
-                                         replace_test=args.replace_test)
+                                               replace_test=args.replace_test,
+                                               approve_cleanup=_confirm_cleanup if args.cleanup_test else None)
             else:
                 outcome = plan_backup(config, **selection,
                                       announce=lambda message: print(message, file=sys.stderr, flush=True))

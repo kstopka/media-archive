@@ -1,6 +1,6 @@
 # Append-only BACKUP trial
 
-Run `media-archive migrate` to upgrade the test database to revision `0011`. Use an isolated configuration, database, source files and archive scope. The normal BACKUP workflow becomes available after the complete backup stage, including snapshots and restore.
+Run `media-archive migrate` to upgrade the test database to the current revision. Use an isolated configuration, database, source files and archive scope. The normal BACKUP workflow becomes available after the complete backup stage, including snapshots and restore.
 
 ```bash
 media-archive --config fixture.env backup --dry-run --profile data --targets a
@@ -21,4 +21,4 @@ If saved history for the selected disk records the same content under a differen
 
 The shared transfer copies through a temporary part, verifies the full SHA-256 and publishes without overwriting. SQLite records the result only after publication. Run the same `backup --append-test` command to recover a failed or interrupted transfer. It recalculates available capacity and checks the latest operation for that copy before attempting another transfer, including when the copy was previously recreated. Orphan parts consume measured free space and are retained for inspection.
 
-The trial runs transfers sequentially. Use the separate [controlled replacement trial](backup-replacement.md) for eligible policies. Cleanup approval, two-target coordination and snapshot publication are later milestones. Synthetic tests cover per-disk conflict names, historical-path approval, verified reuse and recovery between publication and the SQLite result.
+The trial runs transfers sequentially. Use the separate [replacement](backup-replacement.md) and [confirmed cleanup](backup-cleanup.md) trials for their respective policies. Parallel target coordination and snapshot publication belong to later milestones. Synthetic tests cover per-disk conflict names, historical-path approval, verified reuse and recovery between publication and the SQLite result.

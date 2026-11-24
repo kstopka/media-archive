@@ -319,6 +319,32 @@ def load_occurrence(connection: Connection, occurrence_id: int) -> RowMapping:
     return require_row(connection, history.occurrences, id=occurrence_id)
 
 
+def plan_archive_removal(connection: Connection, volume_id: int, path: str, run_id: str) -> None:
+    """Persist a single approved removal before it can affect the filesystem."""
+    require_write_transaction(connection)
+    connection.execute(history.pending_archive_removals.insert().values(
+        volume_id=volume_id, path=str(_path(path, absolute=False)), run_id=run_id,
+    ))
+
+
+def load_pending_archive_removals(connection: Connection, volume_id: int) -> tuple[RowMapping, ...]:
+    pending = history.pending_archive_removals
+    return tuple(connection.execute(pending.select().filter_by(volume_id=volume_id).order_by(pending.c.path)).mappings())
+
+
+def finish_archive_removal(connection: Connection, volume_id: int, path: str, *, absent: bool) -> None:
+    """Clear the intent atomically with any observation of a missing archive path."""
+    require_write_transaction(connection)
+    pending = history.pending_archive_removals
+    intent = require_row(connection, pending, volume_id=volume_id, path=path)
+    if absent:
+        observed_at = datetime.now(timezone.utc)
+        for archive in load_occurrences(connection, "archive", path):
+            if archive.volume_id == volume_id:
+                record_observation(connection, archive.id, intent.run_id, observed_at=observed_at, present=False)
+    connection.execute(pending.delete().where(pending.c.volume_id == volume_id, pending.c.path == path))
+
+
 def load_occurrences(connection: Connection, kind: OccurrenceKind, path: str) -> tuple[RowMapping, ...]:
     """Read distinct historical occurrences at a path, including reused paths."""
     require_utf8(kind, StateError)

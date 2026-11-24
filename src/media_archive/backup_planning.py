@@ -34,6 +34,7 @@ class BackupFile:
     changes: str
     deletions: str
     allow_delete: bool
+    entry: SourceEntry
 
 
 @dataclass(frozen=True)
@@ -209,7 +210,7 @@ def _collect(config: Configuration, stack: ExitStack, roots: tuple[LocalCollecti
                     continue
                 files[path] = _Candidate(
                     BackupFile(path, destination, owner.id, entry.size, policy.id, policy.changes,
-                               policy.deletions, owner.allow_delete and first is None),
+                               policy.deletions, owner.allow_delete and first is None, entry),
                     month, source, entry, local_ids[volume.root],
                 )
     return tuple(files[path] for path in sorted(files)), {volume.physical_device for volume in mounts.values()}

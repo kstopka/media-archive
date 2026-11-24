@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 from media_archive.backup_planning import plan_backup
 from media_archive.backup_execution import execute_backup_trial
-from media_archive._transfer_files import Part
+from media_archive._transfer_files import Destination, Part
 from media_archive.cli import main
 from media_archive.config import ConfigError, load_config
 from media_archive.devices import VolumeUnavailable
@@ -324,6 +324,211 @@ class BackupPlanningTests(unittest.TestCase):
               patch("media_archive.backup_execution.open_local_source", side_effect=self._backup_source)):
             return execute_backup_trial(self.config, profile_id="data", targets=targets, collection_id=collection_id,
                                   replace_test=True)
+
+    def _cleanup(self, approve, targets=("a",), **options):
+        with (patch("media_archive.transfer.verify_volume", side_effect=self._verify_volume),
+              patch("media_archive.backup_cleanup.verify_volume", side_effect=self._verify_volume),
+              patch("media_archive.backup_execution.open_local_source", side_effect=self._backup_source)):
+            return execute_backup_trial(self.config, profile_id="data", targets=targets, collection_id="photos",
+                                        approve_cleanup=approve, **options)
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_cleanup_lists_each_disk_after_transfer_and_only_removes_authorized_paths(self) -> None:
+        self.connected.add(("data", "b"))
+        tracked = self._file("review", "tracked.jpg", b"tracked")
+        group = self.config.archive_group("data")
+
+        def archive(alias, collection_id, relative):
+            return (group.target(alias).mount / group.root_relative
+                    / self.config.collection(collection_id).archive_relative / relative)
+
+        initial = self._cleanup(lambda _: self.fail("Brak listy do zatwierdzenia."), ("a", "b"))
+        self.assertEqual(initial.code, 0, initial.details)
+        tracked.unlink()
+        self._archive_file("data", "a", "review", "only-a.jpg", b"a")
+        self._archive_file("data", "b", "backlog", "only-b.jpg", b"b")
+        self._archive_file("data", "a", "photos_main", "keep.jpg", b"retained")
+        self._archive_file("data", "b", "printed", "keep.jpg", b"retained")
+        self._file("backlog", "variant.jpg", b"new")
+        self._archive_file("data", "a", "backlog", "variant.jpg", b"old")
+        before = {(alias, collection, name) for alias, collection, name in (
+            ("a", "review", "tracked.jpg"), ("a", "review", "only-a.jpg"),
+            ("b", "review", "tracked.jpg"), ("b", "backlog", "only-b.jpg"),
+        )}
+
+        def approve(items):
+            self.assertEqual({(item.target, item.collection_id, item.path.name) for item in items}, before)
+            for alias, collection, name in before:
+                self.assertTrue(archive(alias, collection, name).is_file())
+            variant_name = f"variant-{sha256(b'new').hexdigest()[:8]}.jpg"
+            self.assertEqual(archive("a", "backlog", variant_name).read_bytes(), b"new")
+            self.assertEqual(archive("b", "backlog", "variant.jpg").read_bytes(), b"new")
+            return True
+
+        clean = self._cleanup(approve, ("a", "b"))
+        self.assertEqual(clean.code, 0, clean.details)
+        self.assertEqual(len(clean.details["Usunięte pliki"]), len(before))
+        for alias, collection, name in before:
+            self.assertFalse(archive(alias, collection, name).exists())
+        self.assertEqual(archive("a", "photos_main", "keep.jpg").read_bytes(), b"retained")
+        self.assertEqual(archive("b", "printed", "keep.jpg").read_bytes(), b"retained")
+        self.assertEqual(archive("a", "backlog", "variant.jpg").read_bytes(), b"old")
+        with open_database(self.database) as connection:
+            rows = [row for row in load_locations(connection, None, None)
+                    if row.kind == "archive" and row.path.endswith("/tracked.jpg")]
+            self.assertEqual(len(rows), 2)
+            self.assertTrue(all(row.present == 0 for row in rows))
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_cleanup_decline_keeps_the_verified_transfers_and_archive_files(self) -> None:
+        self._file("review", "new.jpg", b"new")
+        self._archive_file("data", "a", "review", "old.jpg", b"old")
+        group = self.config.archive_group("data")
+        root = group.target("a").mount / group.root_relative / self.config.collection("review").archive_relative
+
+        def decline(items):
+            self.assertEqual([item.path.name for item in items], ["old.jpg"])
+            self.assertEqual((root / "new.jpg").read_bytes(), b"new")
+            return False
+
+        result = self._cleanup(decline)
+        self.assertEqual(result.code, 0, result.details)
+        self.assertEqual(result.details["Usunięte pliki"], [])
+        self.assertEqual((root / "old.jpg").read_bytes(), b"old")
+        self.assertEqual((root / "new.jpg").read_bytes(), b"new")
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_cleanup_recovers_missing_archive_path_after_history_write_fails(self) -> None:
+        source = self._file("review", "sample.jpg", b"archive")
+        self.assertEqual(self._cleanup(lambda _: False).code, 0)
+        group = self.config.archive_group("data")
+        relative = Path(group.root_relative) / self.config.collection("review").archive_relative / "sample.jpg"
+        archive = group.target("a").mount / relative
+        source.unlink()
+        with patch("media_archive.state.history.record_observation", side_effect=StateError("Błąd zapisu")):
+            failed = self._cleanup(lambda _: True)
+        self.assertEqual(failed.code, 3, failed.details)
+        self.assertFalse(archive.exists())
+        with open_database(self.database) as connection:
+            archived, = history.load_occurrences(connection, "archive", relative.as_posix())
+            pending, = history.load_pending_archive_removals(connection, archived.volume_id)
+            self.assertEqual(pending.path, relative.as_posix())
+
+        result = self._cleanup(lambda _: self.fail("Uzgodnienie braku nie wymaga usuwania."))
+        self.assertEqual(result.code, 0, result.details)
+        reconciled, = result.details["Uzgodnione zamiary usunięcia"]
+        self.assertEqual(reconciled["ścieżka"], relative.as_posix())
+        with open_database(self.database) as connection:
+            row, = [row for row in load_locations(connection, None, None) if row.id == archived.id]
+            self.assertEqual(row.present, 0)
+            self.assertEqual(history.load_pending_archive_removals(connection, archived.volume_id), ())
+
+    def test_cleanup_interrupt_before_unlink_requires_new_approval(self) -> None:
+        self._archive_file("data", "a", "review", "old.jpg", b"old")
+        group = self.config.archive_group("data")
+        path = (group.target("a").mount / group.root_relative
+                / self.config.collection("review").archive_relative / "old.jpg")
+        with patch.object(Destination, "remove_verified", side_effect=KeyboardInterrupt):
+            self.assertEqual(self._cleanup(lambda _: True).code, 130)
+
+        approvals = []
+        def decline(items):
+            approvals.extend(items)
+            return False
+
+        result = self._cleanup(decline)
+        self.assertEqual(result.code, 0, result.details)
+        self.assertEqual([item.path.name for item in approvals], ["old.jpg"])
+        self.assertEqual(path.read_bytes(), b"old")
+        reconciled, = result.details["Uzgodnione zamiary usunięcia"]
+        self.assertEqual(reconciled["stan"], "ścieżka istnieje")
+
+    def test_cleanup_checks_archive_scope_spelling_once_per_phase(self) -> None:
+        for number in range(10):
+            self._archive_file("data", "a", "review", f"old-{number}.jpg", b"old")
+        checked = []
+        original = Destination.sibling_names
+
+        def count(destination, name_key):
+            checked.append(destination.path)
+            return original(destination, name_key)
+
+        with patch.object(Destination, "sibling_names", count):
+            result = self._cleanup(lambda _: True)
+        self.assertEqual(result.code, 0, result.details)
+        self.assertEqual(len(result.details["Usunięte pliki"]), 10)
+        group = self.config.archive_group("data")
+        scope = Path(group.root_relative) / self.config.collection("review").archive_relative
+        self.assertEqual(checked.count(scope), 2)
+        self.assertFalse(any(path.is_relative_to(scope) and path != scope for path in checked))
+
+    def test_cleanup_revalidates_the_whole_list_before_removing_anything(self) -> None:
+        self.connected.add(("data", "b"))
+        self._archive_file("data", "a", "review", "a.jpg", b"old")
+        self._archive_file("data", "b", "review", "b.jpg", b"old")
+        group = self.config.archive_group("data")
+        relative = Path(group.root_relative) / self.config.collection("review").archive_relative
+        first = group.target("a").mount / relative / "a.jpg"
+        second = group.target("b").mount / relative / "b.jpg"
+        local = self.config.collection("review").local_root / "b.jpg"
+
+        def return_local_file():
+            self._write(local, b"returned")
+
+        def change_target():
+            self._write(second, b"new")
+
+        def disconnect_target():
+            self.connected.remove(("data", "b"))
+
+        for change in (return_local_file, change_target, disconnect_target):
+            with self.subTest(change=change.__name__):
+                def approve(items):
+                    self.assertEqual(len(items), 2)
+                    change()
+                    return True
+
+                result = self._cleanup(approve, ("a", "b"))
+                self.assertEqual(result.code, 3, result.details)
+                self.assertEqual(result.details["Usunięte pliki"], [])
+                self.assertEqual(first.read_bytes(), b"old")
+                self.assertTrue(second.is_file())
+                local.unlink(missing_ok=True)
+                self._write(second, b"old")
+                self.connected.add(("data", "b"))
+
+    def test_cleanup_stops_before_approval_if_local_collection_is_missing_or_unreadable(self) -> None:
+        self._archive_file("data", "a", "review", "old.jpg", b"old")
+        group = self.config.archive_group("data")
+        root = group.target("a").mount / group.root_relative / self.config.collection("review").archive_relative
+        local = self.config.collection("review").local_root
+        local.rmdir()
+        deny = lambda _: self.fail("Niepełny skan nie pozwala zatwierdzić usunięcia.")
+        missing = self._cleanup(deny)
+        self.assertEqual(missing.code, 3, missing.details)
+        local.mkdir()
+        (local / "unreadable").symlink_to(local / "missing")
+        unreadable = self._cleanup(deny)
+        self.assertEqual(unreadable.code, 3, unreadable.details)
+        self.assertEqual((root / "old.jpg").read_bytes(), b"old")
+
+    def test_cleanup_cli_declines_without_terminal_and_rejects_month_scope(self) -> None:
+        self._archive_file("data", "a", "review", "old.jpg", b"old")
+        group = self.config.archive_group("data")
+        archived = (group.target("a").mount / group.root_relative
+                    / self.config.collection("review").archive_relative / "old.jpg")
+        args = ["--config", str(self.settings), "backup", "--cleanup-test",
+                "--profile", "data", "--collection", "photos", "--targets", "a"]
+        output = StringIO()
+        with (redirect_stdout(output), redirect_stderr(StringIO()),
+              patch("media_archive.cli.sys.stdin", StringIO("USUŃ\n")),
+              patch("media_archive.backup_cleanup.verify_volume", side_effect=self._verify_volume)):
+            with self.assertRaises(SystemExit) as error:
+                main([*args, "--month", "2025-02"])
+            self.assertEqual(error.exception.code, 2)
+            self.assertEqual(main(args), 0)
+        self.assertIn("old.jpg", output.getvalue())
+        self.assertEqual(archived.read_bytes(), b"old")
 
     @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
     def test_replacement_uses_effective_policy_and_records_new_proof_per_disk(self) -> None:

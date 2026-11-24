@@ -1,6 +1,6 @@
 # Controlled BACKUP replacement trial
 
-Use an isolated configuration with synthetic sources, a separate database and dedicated archive directories. The trial requires schema revision `0011`, explicit configuration, profile and selected targets.
+Use an isolated configuration with synthetic sources, a separate database and dedicated archive directories. The trial requires the current schema revision, explicit configuration, profile and selected targets.
 
 ```bash
 media-archive --config fixture.env backup --dry-run --profile data --collection documents --targets a
@@ -21,4 +21,4 @@ Repeat `backup --replace-test` with the same configuration, scope and targets. I
 
 When the source has changed again, recovery first checks unfinished replacements at the same required path on the same archive volume. If the destination contains the earlier operation's published bytes, the trial records that result before starting the next replacement. If the earlier publication cannot be confirmed, the trial pauses at that path and reports the pending operation ID.
 
-The trial processes targets sequentially. Confirmed deletion, parallel target coordination and snapshot publication belong to later milestones. The production BACKUP workflow is enabled after snapshot and recovery integration. [Synthetic tests](../tests/test_backup_planning.py) cover the policy boundary, both archive targets, interruptions on either side of publication, changed sources and destinations, and refreshing the catalog after a manual restore.
+The trial processes targets sequentially. The separate [cleanup trial](backup-cleanup.md) handles confirmed deletion. Parallel target coordination and snapshot publication belong to later milestones. The production BACKUP workflow is enabled after snapshot and recovery integration. [Synthetic tests](../tests/test_backup_planning.py) cover the policy boundary, both archive targets, interruptions on either side of publication, changed sources and destinations, and refreshing the catalog after a manual restore.

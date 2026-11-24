@@ -10,6 +10,7 @@ from pathlib import Path
 from sqlalchemy.engine import Connection
 
 from media_archive.backup_capacity import BackupCopy
+from media_archive.backup_cleanup import Approval, execute_cleanup
 from media_archive.backup_planning import BackupFile, BackupPlan, plan_backup
 from media_archive.config import Configuration
 from media_archive.devices import registered_volume
@@ -103,9 +104,12 @@ def _run_copy(config: Configuration, group: str, file: BackupFile, copy: BackupC
 
 def execute_backup_trial(config: Configuration, *, profile_id: str, targets: tuple[str, ...],
                          collection_id: str | None = None, month: str | None = None, pair: tuple[str, ...] = (),
-                         copy_if_elsewhere: bool = False, replace_test: bool = False) -> BackupPlan:
+                         copy_if_elsewhere: bool = False, replace_test: bool = False,
+                         approve_cleanup: Approval | None = None) -> BackupPlan:
     if not profile_id or not targets:
         raise StateError("Próba BACKUP wymaga jawnego profilu i celów.")
+    if approve_cleanup is not None and (month is not None or replace_test):
+        raise StateError("Próba sprzątania wymaga zakresu Wszystko.")
     try:
         profile = config.backup_profile(profile_id)
     except KeyError:
@@ -118,11 +122,11 @@ def execute_backup_trial(config: Configuration, *, profile_id: str, targets: tup
         with open_database(config.app.database_file) as connection:
             require_reconciled(connection)
         plan = plan_backup(config, profile_id=profile_id, collection_id=collection_id, month=month,
-                           targets=targets, pair=pair, prepare_replacements=replace_test)
+                           targets=targets, pair=pair, prepare_replacements=replace_test or approve_cleanup is not None)
         if plan.code:
             return plan
         policy = "replace_verified" if replace_test else "keep_both"
-        files = {file.path: file for file in plan.files if file.changes == policy}
+        files = {file.path: file for file in plan.files if approve_cleanup is not None or file.changes == policy}
         candidates = [copy for copy in plan.copies if copy.source in files]
         if not copy_if_elsewhere and any(copy.elsewhere for copy in candidates):
             return replace(plan, code=3, message=(
@@ -143,6 +147,11 @@ def execute_backup_trial(config: Configuration, *, profile_id: str, targets: tup
                                details={**plan.details, "Wyniki BACKUP": results})
             result["wynik"] = {"verified": "zgodna", "replace": "zastąpiono"}.get(copy.action, "skopiowano")
             results.append(result)
+        if approve_cleanup is not None:
+            code, message, details = execute_cleanup(config, profile, collection_id, targets, plan.files, approve_cleanup,
+                                                    locks)
+            return replace(plan, code=code, message=message,
+                           details={**plan.details, "Wyniki BACKUP": results, **details})
         message = ("Zakończono próbę kontrolowanego zastępowania BACKUP." if replace_test
                    else "Zakończono próbę BACKUP dla zbiorów dopisywanych.")
         skipped = ("Pliki z polityką dopisywania poza próbą" if replace_test
