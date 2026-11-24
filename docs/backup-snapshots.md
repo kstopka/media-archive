@@ -1,6 +1,6 @@
 # BACKUP snapshot and recovery trial
 
-Use a test configuration, a separate state database and dedicated archive directories. Run `media-archive migrate` to apply the current schema to the test database.
+Use a test configuration, a separate state database and dedicated archive directories. Initialize a new test database with `media-archive --config fixture.env setup --yes`. To upgrade an existing test database, run `media-archive --config fixture.env migrate`.
 
 ```sh
 media-archive --config fixture.env backup --snapshot-test --profile data --targets a b
@@ -19,3 +19,12 @@ Use the existing [verify-snapshot and restore commands](snapshots.md), then run 
 Reconciliation commits a pending BACKUP attempt when a fresh read matches its expected publication. A missing initial copy or the unchanged preimage of a replacement can be retried by BACKUP. If a pending replacement's destination contains different bytes that match a fresh full SHA-256 read of its current local source on the registered volume, revision `0013` closes the old intent as superseded and links it to the archive verification. The attempt history is kept. An unconfirmed pending target or a disconnected volume needed by an unfinished attempt or cleanup keeps the restore requirement active. Offline volumes with historical copies are listed as unchecked. Reconciliation settles prior cleanup records from observed presence and leaves further deletion to a new approval.
 
 [Synthetic tests](../tests/test_backup_planning.py) cover distribution of identical generations, recipient capacity, retention, partial snapshot failure, later archive contents and pending publication recovery.
+
+## Hardware verification
+
+The Stage 6 trial used two separate physical NTFS disks, one synthetic file, a separate SQLite database and dedicated directories for files and snapshots.
+
+- Each disk was tested on its own. BACKUP reported `1/2` fresh copies and the archived file matched the source SHA-256. Each disk supplied a verified snapshot for restoring the test database and clearing the reconciliation requirement. On one disk, restoring an older generation and running `reconcile` recognized a newer archived version and preserved its bytes.
+- The joint run reported `2/2` fresh copies and verified the already matching archive files in place. Both disks received the same generation. `verify-snapshot` succeeded on each disk, and `state.sqlite3`, `settings.env` and `manifest.json` were byte-identical across the two copies.
+
+These results cover the isolated BACKUP workflow. The first production batch and full workflow verification are tracked in [Stage 7](roadmap.md#stage-7--integration-and-controlled-rollout).

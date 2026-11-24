@@ -11,7 +11,9 @@ The planned workflow keeps four operations separate:
 
 ## Status
 
-The CLI supports read-only configuration validation, [quick and full archive audits](docs/audit.md), the [initial inventory](docs/inventory.md), [phone baseline initialization](docs/phone-initialization.md), verified [camera card](docs/camera-import.md) and [phone](docs/phone-import.md) imports to staging, and [sorting](docs/sort.md). Python APIs provide [SQLite lifecycle and migrations](docs/state.md), [explicit configuration registration](docs/registration.md), [media history and initialization](docs/history.md), and [read-only local and Android source access](docs/sources.md). BACKUP supports preview and isolated transfer trials. Regular BACKUP depends on snapshot and recovery integration.
+The CLI supports read-only configuration validation, [quick and full archive audits](docs/audit.md), the [initial inventory](docs/inventory.md), [phone baseline initialization](docs/phone-initialization.md), verified [camera card](docs/camera-import.md) and [phone](docs/phone-import.md) imports to staging, and [sorting](docs/sort.md). Python APIs provide [SQLite lifecycle and migrations](docs/state.md), [explicit configuration registration](docs/registration.md), [media history and initialization](docs/history.md), and [read-only local and Android source access](docs/sources.md).
+
+BACKUP supports preview and isolated trials with integrated snapshots and recovery. The trials passed on two NTFS disks using a synthetic file and a separate database. The first production batch is planned as part of the controlled rollout. [BACKUP snapshot trial](docs/backup-snapshots.md#hardware-verification)
 
 ## Quick start
 

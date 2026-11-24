@@ -2,7 +2,7 @@
 
 This public roadmap tracks project milestones. Checkboxes mark completed milestones. For currently available behavior, see the [technical documentation](README.md).
 
-The CLI, configuration loader, SQLite lifecycle, persistent registration and [history APIs](history.md) are available. The CLI supports camera and phone import, SORT, catalog search, read-only BACKUP scope preview and isolated BACKUP trials. Production BACKUP follows integrated hardware verification. The configuration wizard remains planned. See the [SQLite state reference](state.md).
+The CLI, configuration loader, SQLite lifecycle, persistent registration and [history APIs](history.md) are available. The CLI supports camera and phone import, SORT, catalog search, read-only BACKUP scope preview and isolated BACKUP trials with snapshots and recovery. The BACKUP stage passed hardware verification on NTFS. The first production batch is part of the controlled rollout. The configuration wizard remains planned. See the [SQLite state reference](state.md).
 
 Design references: [archive workflows and state](design/archive-workflows.md) and [future configurator](design/configurator.md). Future module boundaries, database details and command syntax must be finalized during the relevant implementation task.
 
@@ -72,7 +72,7 @@ Target planning must persist each material occurrence's required pair. An explic
 - [x] **6.6 Two-target coordination.** The [isolated coordination trial](backup-coordination.md) runs one queue per target, keeps successful copies and stops both queues on space exhaustion. It reports per-file copy counts and checks fresh evidence for manual space release.
 - [x] **6.7 Snapshot/recovery integration.** The [BACKUP snapshot trial](backup-snapshots.md) publishes one verified generation to admitted writable archives, keeps up to five valid generations per disk and reconciles known archive paths and pending operations after restore.
 
-Backup is ready for normal use only after the **entire stage**, including snapshots and recovery, is accepted. Earlier transfer components remain test-only.
+Stage 6 is complete. Isolated trials verified one fresh copy with each NTFS disk connected on its own, two fresh copies with both connected, the same snapshot generation on both disks, and recovery of the test database. The end-to-end workflow and first authorized production batch remain Stage 7 milestones. [Hardware verification](backup-snapshots.md#hardware-verification)
 
 ## Stage 7 — Integration and controlled rollout
 
