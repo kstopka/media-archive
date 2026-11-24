@@ -9,11 +9,12 @@ from hashlib import file_digest
 import os
 from pathlib import Path
 import re
+import signal
 import stat
 import subprocess
 
 from media_archive.devices import MountedVolume, _mount_id, _open_root
-from media_archive.sources import SourceDigest, SourceEntry
+from media_archive.sources import ReadCancelled, SourceDigest, SourceEntry
 from media_archive.state import StateError
 
 _WORK_NAME = re.compile(r"\.media-archive-transfer-[0-9a-f]{32}", re.IGNORECASE)
@@ -30,6 +31,10 @@ class TransferConflict(StateError):
 
 class LinkUnavailable(StateError):
     """The mount refused to publish a hard link."""
+
+
+class InsufficientSpace(StateError):
+    """The destination ran out of space or dropped below its required reserve."""
 
 
 def _signature(status: os.stat_result) -> tuple[int, ...]:
@@ -175,6 +180,11 @@ class Destination:
 
     def recover_digest(self, *, sync: bool = True) -> SourceDigest | None:
         """Return fresh proof of an existing regular file, or confirmed absence."""
+        observed = self.recover_file(sync=sync)
+        return observed[0] if observed is not None else None
+
+    def recover_file(self, *, sync: bool = True) -> tuple[SourceDigest, SourceEntry] | None:
+        """Return the digest and identity from the same read."""
         try:
             with self.parent() as parent:
                 with _open_regular(parent, self.path.name, self.volume.mount_id) as fd:
@@ -185,7 +195,7 @@ class Destination:
                     if sync:
                         os.fsync(fd)
                         self.check_parent(parent, sync=True)
-                    return digest
+                    return digest, SourceEntry.from_stat(self.path, status)
         except FileNotFoundError:
             # A vanished parent or leaf after opening is not proof of absence.
             self.ensure_absent()
@@ -318,17 +328,36 @@ class Part:
         finally:
             os.close(directory)
 
-    def rsync_from(self, source_fd: int) -> None:
+    def rsync_from(self, source_fd: int, *, cancelled: Callable[[], bool] | None = None) -> None:
         try:
-            result = subprocess.run(
+            process = subprocess.Popen(
                 ["rsync", "--copy-links", "--inplace", "--ignore-times", "--times", "--",
                  f"/proc/self/fd/{source_fd}", f"/proc/self/fd/{self.directory}/copy"],
                 pass_fds=(source_fd, self.directory), stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env={**os.environ, "LC_ALL": "C"},
+                start_new_session=True,
             )
         except FileNotFoundError:
             raise StateError("Nie znaleziono programu rsync.") from None
-        if result.returncode:
+        with process:
+            try:
+                while True:
+                    if cancelled is not None and cancelled():
+                        raise ReadCancelled("Anulowano transfer.")
+                    try:
+                        _, diagnostic = process.communicate(timeout=0.2 if cancelled is not None else None)
+                        break
+                    except subprocess.TimeoutExpired:
+                        continue
+            except (ReadCancelled, KeyboardInterrupt):
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                raise
+        if process.returncode:
+            if b"No space left on device (28)" in diagnostic:
+                raise InsufficientSpace("Brak miejsca na części transferu.")
             raise StateError("rsync nie ukończył zapisu części.")
 
     def verified_copy(self) -> tuple[SourceDigest, os.stat_result]:
@@ -340,11 +369,15 @@ class Part:
             return digest, status
 
     def publish(self, destination: Destination, verified: os.stat_result, *, allow_link_fallback: bool = True,
-                previous: SourceDigest | None = None) -> None:
+                previous: SourceDigest | None = None, cancelled: Callable[[], bool] | None = None) -> SourceEntry:
+        def check_cancellation() -> None:
+            if cancelled is not None and cancelled():
+                raise ReadCancelled("Anulowano transfer.")
+
         if previous is None:
-            self._publish_new(destination, verified, allow_link_fallback)
+            self._publish_new(destination, verified, allow_link_fallback, check_cancellation)
         else:
-            self._replace_verified(destination, verified, previous)
+            self._replace_verified(destination, verified, previous, check_cancellation)
         os.fsync(self.directory)
         destination.check_parent(self.parent, sync=True)
         published = os.stat(destination.path.name, dir_fd=self.parent, follow_symlinks=False)
@@ -357,13 +390,15 @@ class Part:
                 os.rmdir(self.name, dir_fd=self.parent)
             except OSError:
                 pass  # The copy is already durable; retain any remaining directory.
+        return SourceEntry.from_stat(destination.path, published)
 
     def _check_part(self, destination: Destination, verified: os.stat_result) -> None:
         destination.check_parent(self.parent)
         if _signature(os.stat("copy", dir_fd=self.directory, follow_symlinks=False)) != _signature(verified):
             raise StateError("Część zmieniła się od weryfikacji.")
 
-    def _replace_verified(self, destination: Destination, verified: os.stat_result, previous: SourceDigest) -> None:
+    def _replace_verified(self, destination: Destination, verified: os.stat_result, previous: SourceDigest,
+                          check_cancellation: Callable[[], None]) -> None:
         name = destination.path.name
         try:
             with _open_regular(self.parent, name, self.mount_id) as fd:
@@ -372,12 +407,15 @@ class Part:
                 if (digest != previous
                         or _signature(os.stat(name, dir_fd=self.parent, follow_symlinks=False)) != _signature(status)):
                     raise TransferConflict("Starsza kopia zmieniła się przed podmianą. Pozostawiono ją bez zmian.")
+                check_cancellation()
                 os.replace("copy", name, src_dir_fd=self.directory, dst_dir_fd=self.parent)
         except FileNotFoundError:
             raise TransferConflict("Starsza kopia zniknęła przed podmianą.") from None
 
-    def _publish_new(self, destination: Destination, verified: os.stat_result, allow_link_fallback: bool) -> None:
+    def _publish_new(self, destination: Destination, verified: os.stat_result, allow_link_fallback: bool,
+                     check_cancellation: Callable[[], None]) -> None:
         self._check_part(destination, verified)
+        check_cancellation()
         try:
             try:
                 _rename_noreplace(self.directory, "copy", self.parent, destination.path.name)

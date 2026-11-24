@@ -17,8 +17,9 @@ if TYPE_CHECKING:
     from media_archive.backup_planning import _Candidate
 
 
-_CopyAction = Literal["verified", "copy", "replace", "conflict"]
+_CopyAction = Literal["verified", "copy", "replace", "conflict", "check", "blocked"]
 _ESTIMATED_HISTORY_PAGES_PER_CHECK = 16
+PINNED_COPY_CONFLICT = "Zapisana ścieżka kopii zawiera inną treść."
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,8 @@ def check_backup_capacity(
     config: Configuration, candidates: tuple["_Candidate", ...],
     selected: dict[str, MountedVolume], source_disks: set[str], devices: dict[str, int], proposed_pair: frozenset[int],
     errors: list[dict[str, str]], *, prepare_replacements: bool = False,
+    proof_only: frozenset[str] | set[str] = frozenset(),
+    isolate_conflicts: bool = False,
 ) -> tuple[tuple[BackupCopy, ...], set[str], list[dict[str, object]], int]:
     target_disks = {volume.physical_device for volume in selected.values()}
     if len(target_disks) != len(selected) or target_disks & source_disks:
@@ -89,6 +92,8 @@ def check_backup_capacity(
     manifest_bytes = 1024 + 6 * len(str(config.source_file).encode("utf-8"))
     budgets = {}
     for alias, volume in selected.items():
+        if alias in proof_only:
+            continue
         path = Path(config.app.archive_state_dir) / "snapshot-probe"
         try:
             snapshot = Destination(volume, path)
@@ -149,24 +154,22 @@ def check_backup_capacity(
         pinned_paths = dict(pair.pinned)
         for alias in aliases:
             budget = budgets.get(alias)
-            if budget is None:
+            if budget is None and alias not in proof_only:
                 continue
             pinned = pinned_paths.get(devices[alias])
             path = pinned or pair.path
             try:
                 reused = False
-                if (file.changes == "keep_both" or prepare_replacements) and digest is None:
+                if digest is None and (file.changes == "keep_both" or prepare_replacements or alias in proof_only):
                     digest = hash_source_file(item.source, item.entry.path, expected=item.entry)
-                if file.changes == "keep_both":
-                    assert digest is not None
+                if budget is not None:
                     destination = Destination(budget.volume, path)
-                    if pinned is None:
+                    if file.changes == "keep_both" and pinned is None:
+                        assert digest is not None
                         choice = choose_name(destination, digest, suffix_reserved=lambda name: suffix_reserved(alias, name))
                         path, reused = choice.path, choice.reused
                     else:
                         require_destination_name(destination)
-                else:
-                    require_destination_name(Destination(budget.volume, path))
                 normalized = _path_key(path)
                 key = (alias, normalized)
                 parents = {(alias, parent) for parent in normalized.parents}
@@ -176,6 +179,10 @@ def check_backup_capacity(
                     raise StateError("W partii ta sama ścieżka archiwalna jest wymagana jako plik i katalog.")
                 planned_paths[key] = file.path
                 planned_directories.update(parents)
+                if budget is None:
+                    assert digest is not None
+                    copies.append(BackupCopy(file.path, alias, path, "check", pair, digest))
+                    continue
                 destination = Destination(budget.volume, path)
                 size = destination.file_size()
                 reused = reused and size == file.size
@@ -193,7 +200,10 @@ def check_backup_capacity(
                     copies.append(BackupCopy(file.path, alias, path, "verified", pair, digest))
                     continue
                 if file.changes == "keep_both" and pinned is not None and size is not None:
-                    raise StateError("Zapisana ścieżka kopii zawiera inną treść.")
+                    if not isolate_conflicts:
+                        raise StateError(PINNED_COPY_CONFLICT)
+                    copies.append(BackupCopy(file.path, alias, path, "blocked", pair, digest))
+                    continue
                 if path != pair.path and pinned is None:
                     action = "conflict"
                 elif size is None:

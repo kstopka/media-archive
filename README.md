@@ -59,6 +59,7 @@ Setup creates `state.sqlite3` in `APP_STATE_DIR`. The [CLI reference](docs/cli.m
 - [BACKUP preview](docs/backup-planning.md) — select a profile and check its scope and policies.
 - [BACKUP replacement trial](docs/backup-replacement.md) — verify and atomically replace files in a test archive.
 - [BACKUP cleanup trial](docs/backup-cleanup.md) — review and confirm eligible archive removals.
+- [BACKUP coordination trial](docs/backup-coordination.md) — check per-disk transfer results and fresh copy evidence.
 - [Catalog](docs/catalog.md) — find saved locations, review conflicts and verify manual moves.
 - [Configuration](docs/configuration.md) — settings, models, validation and compatibility.
 - [Architecture](docs/architecture.md) — modules and execution flow.

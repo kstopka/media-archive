@@ -3,16 +3,18 @@
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import replace
 from datetime import datetime, timezone
+import errno
 from hashlib import sha256
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Barrier, Event
 import unittest
 import shutil
 from unittest.mock import patch
 
 from media_archive.backup_planning import plan_backup
-from media_archive.backup_execution import execute_backup_trial
+from media_archive.backup_execution import _fresh_copy_status, execute_backup_trial
 from media_archive._transfer_files import Destination, Part
 from media_archive.cli import main
 from media_archive.config import ConfigError, load_config
@@ -331,6 +333,233 @@ class BackupPlanningTests(unittest.TestCase):
               patch("media_archive.backup_execution.open_local_source", side_effect=self._backup_source)):
             return execute_backup_trial(self.config, profile_id="data", targets=targets, collection_id="photos",
                                         approve_cleanup=approve, **options)
+
+    def _parallel(self, targets=("a", "b"), *, final_probe=None, collection_id="photos"):
+        with (patch("media_archive.transfer.verify_volume", side_effect=self._verify_volume),
+              patch("media_archive.backup_execution.verify_volume", side_effect=final_probe or self._verify_volume),
+              patch("media_archive.backup_execution.open_local_source", side_effect=self._backup_source)):
+            return execute_backup_trial(self.config, profile_id="data", targets=targets, collection_id=collection_id,
+                                        parallel_test=True)
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_parallel_backup_overlaps_transfers_and_reuses_their_full_reads(self) -> None:
+        self.connected.add(("data", "b"))
+        self._file("photos", "item.jpg")
+        barrier = Barrier(2, timeout=10)
+        copy = Part.rsync_from
+        reads = []
+        verify = Part.verified_copy
+
+        def overlap(part, fd, **options):
+            barrier.wait()
+            copy(part, fd, **options)
+
+        def read_part(part):
+            reads.append(part.name)
+            return verify(part)
+
+        with (patch.object(Part, "rsync_from", overlap), patch.object(Part, "verified_copy", read_part),
+              patch.object(Destination, "recover_file", autospec=True, side_effect=Destination.recover_file) as recover):
+            result = self._parallel()
+        self.assertEqual(result.code, 0, result.details)
+        self.assertEqual(len(reads), 2)
+        self.assertEqual(recover.call_count, 2)  # Both reads checked absence before transfer.
+        row, = result.details["Stan kopii BACKUP"]
+        self.assertEqual(row["status kopii"], "2/2")
+        self.assertEqual(row["ręczne zwolnienie miejsca"], "można ręcznie zwolnić miejsce")
+        self.assertEqual(len({proof["dowód"] for proof in row["kopie"]}), 2)
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_parallel_backup_reports_one_disk_and_later_completes_both(self) -> None:
+        self._file("review", "item.jpg")
+        first = self._parallel()
+        self.assertEqual(first.code, 3, first.details)
+        self.assertEqual(first.details["Stan kopii BACKUP"][0]["status kopii"], "1/2")
+        self.connected.add(("data", "b"))
+        copy = Part.rsync_from
+        group = self.config.archive_group("data")
+
+        def copy_second(part, fd, **options):
+            self.assertTrue(Path(f"/proc/self/fd/{part.parent}").resolve().is_relative_to(group.target("b").mount))
+            copy(part, fd, **options)
+
+        with patch.object(Part, "rsync_from", copy_second):
+            second = self._parallel()
+        self.assertEqual(second.code, 0, second.details)
+        row, = second.details["Stan kopii BACKUP"]
+        self.assertEqual(row["status kopii"], "2/2")
+        self.assertIn("może zaproponować usunięcie kopii", row["ręczne zwolnienie miejsca"])
+        self.assertNotEqual(first.details["Stan kopii BACKUP"][0]["kopie"][0]["dowód"],
+                            row["kopie"][0]["dowód"])
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_parallel_backup_finishes_healthy_target_when_other_fails(self) -> None:
+        self.connected.add(("data", "b"))
+        self._file("photos", "1.jpg")
+        self._file("photos", "2.jpg")
+        group = self.config.archive_group("data")
+        copy = Part.rsync_from
+
+        def one_failure(part, fd, **options):
+            if Path(f"/proc/self/fd/{part.parent}").resolve().is_relative_to(group.target("a").mount):
+                raise StateError("Symulowana awaria celu.")
+            copy(part, fd, **options)
+
+        with patch.object(Part, "rsync_from", one_failure):
+            result = self._parallel()
+        self.assertEqual(result.code, 3, result.details)
+        self.assertEqual([row["status kopii"] for row in result.details["Stan kopii BACKUP"]], ["1/2", "1/2"])
+        self.assertEqual([row["wynik"] for row in result.details["Wyniki BACKUP"] if row["cel"] == "b"],
+                         ["skopiowano", "skopiowano"])
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_parallel_backup_isolates_a_pinned_conflict_after_whole_batch_capacity_check(self) -> None:
+        self._file("photos", "z-conflict.jpg", b"original")
+        self.assertEqual(self._parallel(("a",)).code, 0)
+        self._archive_file("data", "a", "photos", "z-conflict.jpg", b"modified")
+        self._file("photos", "a-new.jpg")
+        self.connected.add(("data", "b"))
+        group = self.config.archive_group("data")
+        relative = Path(group.root_relative) / self.config.collection("photos").archive_relative
+        first = group.target("a").mount / relative
+        second = group.target("b").mount / relative
+        space = Destination.space
+
+        def insufficient(destination):
+            if destination.volume.root == group.target("b").mount:
+                return 0, 4096
+            return space(destination)
+
+        with patch.object(Destination, "space", insufficient):
+            result = self._parallel()
+        self.assertEqual(result.code, 3, result.details)
+        self.assertTrue(any(row["brakuje"] for row in result.details["Pojemność BACKUP"] if row["cel"] == "b"))
+        self.assertFalse(second.exists())
+
+        result = self._parallel()
+        self.assertEqual(result.code, 3, result.details)
+        self.assertEqual((first / "z-conflict.jpg").read_bytes(), b"modified")
+        self.assertFalse((first / "a-new.jpg").exists())
+        self.assertEqual((second / "z-conflict.jpg").read_bytes(), b"original")
+        self.assertEqual((second / "a-new.jpg").read_bytes(), b"media")
+        first_results = [row for row in result.details["Wyniki BACKUP"] if row["cel"] == "a"]
+        self.assertEqual(first_results[0]["wynik"], "pominięto")
+        self.assertIn("inną treść", first_results[1]["błąd"])
+        self.assertEqual([row["status kopii"] for row in result.details["Stan kopii BACKUP"]], ["1/2", "1/2"])
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_parallel_backup_stops_both_queues_if_a_target_runs_out_of_space(self) -> None:
+        self.connected.add(("data", "b"))
+        for name in ("1.jpg", "2.jpg", "3.jpg"):
+            self._file("photos", name)
+        group = self.config.archive_group("data")
+        copy = Part.rsync_from
+        second_on_a = Event()
+
+        def fill_target(part, fd, *, cancelled):
+            parent = Path(f"/proc/self/fd/{part.parent}").resolve()
+            if parent.is_relative_to(group.target("b").mount):
+                self.assertTrue(second_on_a.wait(10))
+                raise OSError(errno.ENOSPC, "test")
+            if Path(f"/proc/self/fd/{fd}").resolve().name == "2.jpg":
+                second_on_a.set()
+                for _ in range(100):
+                    if cancelled():
+                        break
+                    Event().wait(0.05)
+                self.assertTrue(cancelled())
+            copy(part, fd, cancelled=cancelled)
+
+        with patch.object(Part, "rsync_from", fill_target):
+            result = self._parallel()
+        self.assertEqual(result.code, 3, result.details)
+        self.assertIn("Brak miejsca", result.message)
+        self.assertEqual([row["status kopii"] for row in result.details["Stan kopii BACKUP"]],
+                         ["1/2", "0/2", "0/2"])
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_parallel_backup_excludes_a_copy_that_changes_after_verification(self) -> None:
+        self.connected.add(("data", "b"))
+        self._file("photos", "item.jpg", b"original")
+
+        @contextmanager
+        def change_before_final_read(config, key):
+            if key.alias == "a":
+                self._archive_file("data", "a", "photos", "item.jpg", b"modified")
+            with self._verify_volume(config, key) as volume:
+                yield volume
+
+        result = self._parallel(final_probe=change_before_final_read)
+        self.assertEqual(result.code, 3, result.details)
+        row, = result.details["Stan kopii BACKUP"]
+        self.assertEqual(row["status kopii"], "1/2")
+        self.assertEqual([proof["cel"] for proof in row["kopie"]], ["b"])
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_parallel_backup_counts_fresh_evidence_on_a_read_only_target(self) -> None:
+        self.connected.add(("data", "b"))
+        self._file("photos", "item.jpg")
+        self._file("photos", "later.jpg")
+        self.assertEqual(self._parallel().code, 0)
+        group = self.config.archive_group("data")
+        readonly = group.model_copy(update={"targets": (
+            group.target("a"), group.target("b").model_copy(update={"state": "read_only"}),
+        )})
+        self.config = self.config.model_copy(update={"archive_groups": tuple(
+            readonly if item.id == group.id else item for item in self.config.archive_groups
+        )})
+        with patch.object(Part, "rsync_from", side_effect=AssertionError("Obie kopie już istnieją.")):
+            result = self._parallel()
+        self.assertEqual(result.code, 0, result.details)
+        self.assertEqual(result.details["Stan kopii BACKUP"][0]["status kopii"], "2/2")
+        self.assertEqual([row["cel"] for row in result.details["Pojemność BACKUP"]], ["a"])
+        self.assertEqual([row["wynik"] for row in result.details["Wyniki BACKUP"] if row["cel"] == "b"],
+                         ["zgodna · tylko do odczytu"] * 2)
+        missing = group.target("b").mount / group.root_relative / self.config.collection("photos").archive_relative / "item.jpg"
+        missing.unlink()
+        partial = self._parallel()
+        self.assertEqual(partial.code, 3, partial.details)
+        self.assertEqual([row["status kopii"] for row in partial.details["Stan kopii BACKUP"]], ["1/2", "2/2"])
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_parallel_backup_invalidates_both_copies_after_a_local_edit(self) -> None:
+        self.connected.add(("data", "b"))
+        file = self._file("photos", "item.jpg", b"old")
+
+        def changed_source(*args):
+            self._write(file, b"new")
+            return _fresh_copy_status(*args)
+
+        with patch("media_archive.backup_execution._fresh_copy_status", side_effect=changed_source):
+            result = self._parallel()
+        self.assertEqual(result.code, 3, result.details)
+        row, = result.details["Stan kopii BACKUP"]
+        self.assertEqual(row["status kopii"], "0/2")
+        self.assertEqual(row["kopie"], [])
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_parallel_backup_detects_source_edit_during_final_archive_check(self) -> None:
+        self.connected.add(("data", "b"))
+        source = self._file("photos", "sample.jpg", b"original")
+        attributes = LocalSource.attributes
+        second = self.config.archive_group("data").target("b").mount
+
+        def edit_during_archive_check(reader, path):
+            if reader._volume.root == second:
+                self._write(source, b"modified")
+            return attributes(reader, path)
+
+        def final_check(*args):
+            with patch.object(LocalSource, "attributes", edit_during_archive_check):
+                return _fresh_copy_status(*args)
+
+        with patch("media_archive.backup_execution._fresh_copy_status", side_effect=final_check):
+            result = self._parallel()
+        self.assertEqual(result.code, 3, result.details)
+        row, = result.details["Stan kopii BACKUP"]
+        self.assertEqual(source.read_bytes(), b"modified")
+        self.assertEqual(row["status kopii"], "0/2")
+        self.assertEqual(row["ręczne zwolnienie miejsca"], "brak dwóch świeżych kopii")
 
     @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
     def test_cleanup_lists_each_disk_after_transfer_and_only_removes_authorized_paths(self) -> None:

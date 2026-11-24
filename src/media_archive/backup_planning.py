@@ -224,7 +224,8 @@ def _issue(errors: list[dict[str, str]], path: Path, error: StateError | OSError
 
 
 def _probe_targets(config: Configuration, stack: ExitStack, group_ids: set[str],
-                   aliases: tuple[str, ...]) -> tuple[dict[str, dict[str, MountedVolume]], list[dict[str, str]]]:
+                   aliases: tuple[str, ...], *, include_read_only: bool = False,
+                   ) -> tuple[dict[str, dict[str, MountedVolume]], list[dict[str, str]]]:
     connected: dict[str, dict[str, MountedVolume]] = {}
     status = []
     for group in config.archive_groups:
@@ -236,24 +237,27 @@ def _probe_targets(config: Configuration, stack: ExitStack, group_ids: set[str],
             status.append(row)
             if aliases and target.alias not in aliases:
                 row["stan"] = "niewybrany"
-            elif target.state == "read_only":
+            elif target.state == "read_only" and not include_read_only:
                 row["stan"] = "tylko do odczytu"
             else:
                 try:
                     key = DeviceKey("archive", target.alias, group.id)
-                    available[target.alias] = stack.enter_context(verify_volume(config, key, writable=True))
+                    available[target.alias] = stack.enter_context(
+                        verify_volume(config, key, writable=target.state != "read_only"),
+                    )
                 except VolumeUnavailable:
                     row["stan"] = "odłączony"
                 except (ConfigError, StateError) as error:
                     row.update(stan="niedostępny do zapisu", uwaga=str(error))
                 else:
-                    row["stan"] = "dostępny"
+                    row["stan"] = "tylko do odczytu" if target.state == "read_only" else "dostępny"
     return connected, status
 
 
 def plan_backup(config: Configuration, *, profile_id: str | None = None, collection_id: str | None = None,
                 month: str | None = None, targets: tuple[str, ...] = (), pair: tuple[str, ...] = (),
-                announce: Callable[[str], None] = lambda _: None, prepare_replacements: bool = False) -> BackupPlan:
+                announce: Callable[[str], None] = lambda _: None, prepare_replacements: bool = False,
+                coordination_trial: bool = False) -> BackupPlan:
     """Select a registered profile and build a read-only candidate manifest."""
     check_application_paths(config)
     first = _month(month) if month is not None else None
@@ -274,7 +278,8 @@ def plan_backup(config: Configuration, *, profile_id: str | None = None, collect
     database = config.app.database_file
     with installation_lock(database), ExitStack() as stack:
         validate_registered_configuration(config)
-        connected, target_status = _probe_targets(config, stack, {item.archive_group_id for item in profiles}, targets)
+        connected, target_status = _probe_targets(config, stack, {item.archive_group_id for item in profiles}, targets,
+                                                  include_read_only=coordination_trial)
         matching = tuple(profile for profile in profiles if connected[profile.archive_group_id])
         details: dict[str, object] = {"Profile BACKUP": [item.id for item in matching], "Cele BACKUP": target_status}
         if not matching:
@@ -285,16 +290,19 @@ def plan_backup(config: Configuration, *, profile_id: str | None = None, collect
         selected = connected[profile.archive_group_id]
         details["Profil BACKUP"] = profile.id
         details["Wybrane cele"] = list(selected)
-        if len(selected) > 2 or (targets and set(targets) != set(selected)):
+        disconnected = {row["cel"] for row in target_status
+                        if row["grupa"] == profile.archive_group_id and row["stan"] == "odłączony"}
+        allowed = set(selected) | (disconnected if coordination_trial else set())
+        if len(selected) > 2 or not set(targets) <= allowed:
             return BackupPlan(3, "Wybierz jeden albo dwa dostępne cele przez --profile i --targets.", details)
         return _plan_scope(config, stack, profile, selected, collection_id, first, details, pair, announce,
-                           prepare_replacements)
+                           prepare_replacements, coordination_trial)
 
 
 def _plan_scope(config: Configuration, stack: ExitStack, profile: BackupProfile,
                 selected: dict[str, MountedVolume], collection_id: str | None, first: date | None,
                 details: dict[str, object], pair: tuple[str, ...], announce: Callable[[str], None],
-                prepare_replacements: bool) -> BackupPlan:
+                prepare_replacements: bool, coordination_trial: bool) -> BackupPlan:
     roots = config.profile_collections(profile.id)
     details["Zakresy BACKUP"] = [{"zbiór": "Wszystko", "label": profile.label}, *(
         {"zbiór": item.id, "label": item.label, "miesiące": bool(config.month_collections(item.id))} for item in roots
@@ -347,6 +355,8 @@ def _plan_scope(config: Configuration, stack: ExitStack, profile: BackupProfile,
     copies, pending_months, capacity, outside_selected = check_backup_capacity(
         config, candidates, selected, source_disks, devices, proposed_pair, errors,
         prepare_replacements=prepare_replacements,
+        proof_only={alias for alias in selected if group.target(alias).state == "read_only"},
+        isolate_conflicts=coordination_trial,
     )
     locations = []
     annotated = []
@@ -356,7 +366,7 @@ def _plan_scope(config: Configuration, stack: ExitStack, profile: BackupProfile,
             if _archive_owner(copy.archive_path, reserved) != owners[copy.source]:
                 _issue(errors, copy.archive_path, StateError("Planowana kopia koliduje z zarezerwowanym celem."),
                        alias=copy.target)
-            if copy.action == "verified" or copy.digest is None:
+            if copy.action in ("verified", "check", "blocked") or copy.digest is None:
                 annotated.append(copy)
                 continue
             content = history.find_content(connection, copy.digest.sha256, copy.digest.size)

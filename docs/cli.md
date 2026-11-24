@@ -35,6 +35,7 @@ Use `media-archive` or `python -m media_archive`. Put `--config FILE` before the
 | `backup --append-test --profile ID --targets ALIAS ...` | Run an [isolated append-only backup trial](backup-append.md) with an explicit configuration. |
 | `backup --replace-test --profile ID --targets ALIAS ...` | Run an [isolated controlled replacement trial](backup-replacement.md) with an explicit configuration. |
 | `backup --cleanup-test --profile ID --targets ALIAS ...` | Run verified transfers and [review an exact archive cleanup list](backup-cleanup.md) with an explicit configuration. |
+| `backup --parallel-test --profile ID --targets ALIAS ...` | Run [coordinated transfers](backup-coordination.md) and report fresh copy evidence with an explicit configuration. |
 | `backup --dry-run [--profile ID] [--targets ALIAS ...] [--pair ALIAS ALIAS] [--collection ID] [--month YYYY-MM]` | Preview [BACKUP scope, policies and capacity](backup-planning.md). |
 
 All commands that need existing state report a missing database as an error. Setup and migration use the [SQLite lifecycle](state.md#first-setup-and-upgrades). The configuration wizard is a separate planned feature. Camera import uses the [journal](journal.md) and [history](history.md).

@@ -206,6 +206,8 @@ def _parser() -> argparse.ArgumentParser:
     backup_mode.add_argument("--append-test", action="store_true", help="wykonaj próbę dopisywania w konfiguracji testowej")
     backup_mode.add_argument("--replace-test", action="store_true", help="wykonaj próbę podmiany w konfiguracji testowej")
     backup_mode.add_argument("--cleanup-test", action="store_true", help="wykonaj transfery i zapytaj o usunięcia w próbie")
+    backup_mode.add_argument("--parallel-test", action="store_true",
+                             help="sprawdź koordynację celów i świeże dowody kopii")
     backup.add_argument("--copy-if-elsewhere", action="store_true",
                         help="zatwierdź nową kopię mimo zapisanej kopii pod inną ścieżką")
     backup.add_argument("--profile", metavar="PROFIL")
@@ -401,7 +403,8 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             if not dry_run:
                 outcome = execute_backup_trial(config, **selection, copy_if_elsewhere=args.copy_if_elsewhere,
                                                replace_test=args.replace_test,
-                                               approve_cleanup=_confirm_cleanup if args.cleanup_test else None)
+                                               approve_cleanup=_confirm_cleanup if args.cleanup_test else None,
+                                               parallel_test=args.parallel_test)
             else:
                 outcome = plan_backup(config, **selection,
                                       announce=lambda message: print(message, file=sys.stderr, flush=True))
