@@ -327,9 +327,12 @@ def plan_archive_removal(connection: Connection, volume_id: int, path: str, run_
     ))
 
 
-def load_pending_archive_removals(connection: Connection, volume_id: int) -> tuple[RowMapping, ...]:
+def load_pending_archive_removals(connection: Connection, volume_id: int | None = None) -> tuple[RowMapping, ...]:
     pending = history.pending_archive_removals
-    return tuple(connection.execute(pending.select().filter_by(volume_id=volume_id).order_by(pending.c.path)).mappings())
+    query = pending.select().order_by(pending.c.volume_id, pending.c.path)
+    if volume_id is not None:
+        query = query.filter_by(volume_id=volume_id)
+    return tuple(connection.execute(query).mappings())
 
 
 def finish_archive_removal(connection: Connection, volume_id: int, path: str, *, absent: bool) -> None:

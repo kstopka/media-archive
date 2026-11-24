@@ -162,7 +162,7 @@ def _parser() -> argparse.ArgumentParser:
     resume.add_argument("operation_id", type=_operation_id, metavar="ID_OPERACJI")
     resume.add_argument("--card", metavar="KARTA")
     resume.add_argument("--mount", type=Path, metavar="KATALOG")
-    reconcile = commands.add_parser("reconcile", help="uzgodnij stan importu po przywróceniu bazy")
+    reconcile = commands.add_parser("reconcile", help="uzgodnij stan plików po przywróceniu bazy")
     reconcile.add_argument("--audit", action="append", default=[], metavar="ID_AUDYTU")
     snapshot = commands.add_parser("snapshot", help="zapisz generację stanu")
     snapshot.add_argument("directory", type=Path, metavar="KATALOG")
@@ -208,6 +208,8 @@ def _parser() -> argparse.ArgumentParser:
     backup_mode.add_argument("--cleanup-test", action="store_true", help="wykonaj transfery i zapytaj o usunięcia w próbie")
     backup_mode.add_argument("--parallel-test", action="store_true",
                              help="sprawdź koordynację celów i świeże dowody kopii")
+    backup_mode.add_argument("--snapshot-test", action="store_true",
+                             help="wykonaj próbę BACKUP ze snapshotami na archiwach")
     backup.add_argument("--copy-if-elsewhere", action="store_true",
                         help="zatwierdź nową kopię mimo zapisanej kopii pod inną ścieżką")
     backup.add_argument("--profile", metavar="PROFIL")
@@ -403,8 +405,9 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             if not dry_run:
                 outcome = execute_backup_trial(config, **selection, copy_if_elsewhere=args.copy_if_elsewhere,
                                                replace_test=args.replace_test,
-                                               approve_cleanup=_confirm_cleanup if args.cleanup_test else None,
-                                               parallel_test=args.parallel_test)
+                                               approve_cleanup=_confirm_cleanup
+                                               if args.cleanup_test or (args.snapshot_test and args.month is None) else None,
+                                               parallel_test=args.parallel_test, snapshot_test=args.snapshot_test)
             else:
                 outcome = plan_backup(config, **selection,
                                       announce=lambda message: print(message, file=sys.stderr, flush=True))
@@ -413,9 +416,9 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             try:
                 details = reconcile_imports(config, args.audit)
             except StateError as error:
-                code, message, details = 3, f"Uzgodnienie importu nie zostało zakończone. {error}", {}
+                code, message, details = 3, f"Uzgodnienie stanu po przywróceniu nie zostało zakończone. {error}", {}
             else:
-                message = "Stan importu uzgodniony. Można wznowić import."
+                message = "Stan po przywróceniu uzgodniony. Można wznowić operacje."
         else:
             details = operations.pending(config, getattr(args, "operation_id", None))
             message = "Plan wznowienia." if dry_run else "Podgląd niedokończonych operacji."

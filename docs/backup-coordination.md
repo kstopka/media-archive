@@ -20,4 +20,4 @@ Each file reports `0/2`, `1/2` or `2/2` based on verified copies of the current 
 
 The report indicates manual space release only for paths with two fresh copies on separate physical disks. It highlights paths with confirmed deletion policies because removing the local file can make the next All run propose archive cleanup. The indication is scoped to the current run.
 
-Confirmed cleanup remains a separate trial. Snapshot publication and production BACKUP are planned for the next milestone. [Synthetic tests](../tests/test_backup_planning.py) cover overlapping transfers, one-target completion and retry, shared stop on space exhaustion, and invalidation after verification.
+Use the [BACKUP snapshot trial](backup-snapshots.md) to exercise integrated snapshot publication. [Synthetic tests](../tests/test_backup_planning.py) cover overlapping transfers, one-target completion and retry, shared stop on space exhaustion, and invalidation after verification.

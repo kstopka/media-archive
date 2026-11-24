@@ -11,6 +11,7 @@ from sqlalchemy.engine import Connection, RowMapping
 
 from media_archive._transfer_files import Destination
 from media_archive.audit import _Scan, _scan
+from media_archive.backup_restore import inspect_restored_archives, record_restored_archives
 from media_archive.config import Configuration
 from media_archive.devices import MountedVolume, registered_volume, staging_volume, verify_volume
 from media_archive.import_journal import ImportOperation, commit_import, load_import_operation
@@ -148,7 +149,7 @@ def _scan_undated(config: Configuration, targets: tuple[RowMapping, ...]) -> dic
 
 
 def reconcile_imports(config: Configuration, audit_ids: Iterable[str] = ()) -> dict[str, object]:
-    """Clear the restore requirement only after import state has been accounted for."""
+    """Reconcile local work and known archive locations before clearing the restore requirement."""
     check_application_paths(config)
     database = config.app.database_file
     staging = config.local.staging_root
@@ -176,7 +177,9 @@ def reconcile_imports(config: Configuration, audit_ids: Iterable[str] = ()) -> d
                     raise StateError("Stan przywrócenia zmienił się przed rozpoczęciem uzgodnienia.")
                 unfinished = journal.load_unfinished(connection)
                 planned_sort = [load_sort_operation(connection, operation_id) for operation_id in sorted(sort_ids)]
-                operations = [load_import_operation(connection, row.id) for row in unfinished if row.id not in sort_ids]
+                backup = tuple(row for row in unfinished if journal.backup_retry_command(row))
+                operations = [load_import_operation(connection, row.id) for row in unfinished
+                              if row.id not in sort_ids and not journal.backup_retry_command(row)]
                 imports = history.load_staged_imports(connection)
                 undated = sort_moves.undated_locations(connection)
                 known_undated = sort_moves.undated_targets(connection)
@@ -204,6 +207,7 @@ def reconcile_imports(config: Configuration, audit_ids: Iterable[str] = ()) -> d
             except OSError:
                 raise StateError("Nie można bezpiecznie sprawdzić stagingu po przywróceniu bazy.") from None
             found_undated = _scan_undated(config, known_undated)
+            archive_evidence = inspect_restored_archives(config, connection, backup)
             sort_evidence = []
             for operation in planned_sort:
                 with open_database(database) as read:
@@ -234,12 +238,14 @@ def reconcile_imports(config: Configuration, audit_ids: Iterable[str] = ()) -> d
                         absent += 1
                 for operation, digest in sort_evidence:
                     record_restored_sort(connection, locks, operation, digest)
+                archives = record_restored_archives(connection, locks, archive_evidence)
             return {
                 "Generacja": restored.generation_id, "Pełne audyty użyte do uzgodnienia": audits,
                 "Zweryfikowane pliki stagingu": len(found), "Zatwierdzone próby": matched,
                 "Próby z potwierdzonym brakiem celu": absent,
                 "Sprawdzone operacje SORT": len(sort_evidence),
                 "Brakujące materiały wymagające jawnego reimportu": missing_material,
+                **archives,
             }
 
 

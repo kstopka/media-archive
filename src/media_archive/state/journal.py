@@ -18,6 +18,7 @@ from . import _history_tables as history, _registry_tables as registry
 from ._history_queries import find, insert_id, require_row, require_write_transaction
 from .errors import StateError
 from .locking import OperationLocks, Resource, canonical_path, collection_resource, require_locks
+from .migrations import schema_version
 from .reconciliation import require_reconciled
 from .sort_moves import moves as sort_moves
 from .registry import _validate_registered_configuration
@@ -30,6 +31,8 @@ attempts = table("journal_attempts", column("id"), column("operation_id"), colum
                  column("verification_floor"), column("observation_floor"), schema="main")
 events = table("journal_events", column("id"), column("attempt_id"), column("state"), column("recorded_at"),
                column("error_code"), column("observation_id"), schema="main")
+superseded_backups = table("journal_superseded_backups", column("operation_id"), column("verification_id"),
+                           schema="main")
 
 _NEXT = {
     "planned": "transferring",
@@ -193,6 +196,8 @@ def start_attempt(
     require_utf8(run_id, StateError)
     require_row(connection, history.runs, id=run_id)
     require_row(connection, operations, id=operation_id)
+    if load_backup_supersession(connection, operation_id) is not None:
+        raise StateError("Bieżąca zweryfikowana kopia zastąpiła zamiar tej podmiany.")
     owner = _require_locks(connection, locks, _operation_resources(connection, operation_id))
     previous = connection.execute(attempts.select().filter_by(operation_id=operation_id)
                                   .order_by(attempts.c.id.desc()).limit(1)).mappings().one_or_none()
@@ -359,9 +364,40 @@ def load_events(connection: Connection, attempt_id: int) -> tuple[RowMapping, ..
 
 def load_unfinished(connection: Connection) -> tuple[RowMapping, ...]:
     """Return pending/retryable intents. A listed operation may still be owned."""
-    return tuple(connection.execute(operations.select().where(~operations.c.id.in_(
+    query = operations.select().where(~operations.c.id.in_(
         attempts.select().with_only_columns(attempts.c.operation_id).filter_by(state="committed")
-    )).order_by(operations.c.id)).mappings())
+    ))
+    if schema_version(connection) >= "0013":
+        query = query.where(~operations.c.id.in_(select(superseded_backups.c.operation_id)))
+    return tuple(connection.execute(query.order_by(operations.c.id)).mappings())
+
+
+def load_backup_supersession(connection: Connection, operation_id: int) -> RowMapping | None:
+    if schema_version(connection) < "0013":
+        return None
+    return find(connection, superseded_backups, operation_id=operation_id)
+
+
+def supersede_backup(connection: Connection, locks: OperationLocks, operation_id: int,
+                     verification_id: int) -> None:
+    """Close a restored replacement intent with verified different content on its exact target."""
+    require_write_transaction(connection)
+    operation = load_operation(connection, operation_id)
+    _require_locks(connection, locks, _operation_resources(connection, operation_id))
+    target = require_row(connection, history.occurrences, id=operation.target_occurrence_id)
+    proof = require_row(connection, history.verifications, id=verification_id)
+    current = require_row(connection, history.occurrences, id=proof.occurrence_id)
+    last = load_attempts(connection, operation_id)
+    if (not operation.operation_key.startswith(BACKUP_REPLACE_PREFIX)
+            or target.kind != "archive" or current.kind != "archive"
+            or (current.volume_id, current.path) != (target.volume_id, target.path)
+            or current.content_id == target.content_id or proof.result != "match"
+            or (last and last[-1].state == "committed")
+            or load_backup_supersession(connection, operation_id) is not None):
+        raise StateError("Zastąpienie zamiaru wymaga zgodnego odczytu innej treści z tej samej ścieżki i woluminu.")
+    if last and last[-1].state in _ACTIVE:
+        _set_state(connection, last[-1], "interrupted", error_code="superseded_by_current_copy")
+    connection.execute(superseded_backups.insert().values(operation_id=operation_id, verification_id=verification_id))
 
 
 def load_pending_replacements(connection: Connection, volume_id: int, path: str) -> tuple[RowMapping, ...]:
@@ -375,4 +411,19 @@ def load_pending_replacements(connection: Connection, volume_id: int, path: str)
                     ~select(attempts.c.id).where(attempts.c.operation_id == operations.c.id,
                                                 attempts.c.state == "committed").exists())
              .order_by(operations.c.id))
+    if schema_version(connection) >= "0013":
+        query = query.where(~operations.c.id.in_(select(superseded_backups.c.operation_id)))
     return tuple(connection.execute(query).mappings())
+
+
+def load_backup_locations(connection: Connection) -> tuple[tuple[int, str], ...]:
+    """Return journal targets and fully verified archive paths, including read-only copies."""
+    target = history.occurrences
+    transfers = (select(target.c.volume_id, target.c.path)
+             .join_from(operations, target, operations.c.target_occurrence_id == target.c.id)
+             .where(operations.c.operation_key.startswith("backup:"), target.c.kind == "archive"))
+    reads = (select(target.c.volume_id, target.c.path)
+             .join_from(history.verifications, target, history.verifications.c.occurrence_id == target.c.id)
+             .where(target.c.kind == "archive", history.verifications.c.result == "match"))
+    query = transfers.union(reads).order_by("volume_id", "path")
+    return tuple((row.volume_id, row.path) for row in connection.execute(query))

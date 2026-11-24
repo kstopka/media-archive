@@ -17,6 +17,7 @@ from media_archive._transfer_files import Destination, InsufficientSpace
 from media_archive.backup_capacity import PINNED_COPY_CONFLICT, BackupCopy
 from media_archive.backup_cleanup import Approval, execute_cleanup
 from media_archive.backup_planning import BackupFile, BackupPlan, _local_mount, plan_backup
+from media_archive.backup_snapshots import capture_backup_settings, distribute_snapshot, preflight_snapshots
 from media_archive.config import ConfigError, Configuration
 from media_archive.devices import MountedVolume, registered_volume, verify_volume
 from media_archive.sort_conflicts import require_destination_name
@@ -99,11 +100,12 @@ def _run_copy(config: Configuration, group: str, file: BackupFile, copy: BackupC
         operation = journal.find_operation(connection, token)
         while operation is not None:
             attempts = journal.load_attempts(connection, operation.id)
-            if not attempts or attempts[-1].state != "committed":
+            superseded = journal.load_backup_supersession(connection, operation.id) is not None
+            if not superseded and (not attempts or attempts[-1].state != "committed"):
                 break
             token = f"{prefix}{operation.id}"
             successor = journal.find_operation(connection, token)
-            if successor is None and copy.action == "verified":
+            if successor is None and copy.action == "verified" and not superseded:
                 if not replacement or history.archive_copy_last_seen_present(connection, operation.target_occurrence_id):
                     if not fresh:
                         return operation.id, None, None
@@ -163,6 +165,7 @@ def _fresh_copy_status(config: Configuration, group: str, files: dict[Path, Back
                         raise StateError("Kopia lub nośnik zmieniły się po weryfikacji.")
                 except (ConfigError, StateError, OSError):
                     invalidated = True
+                    match.read = None
                     match.report["błąd końcowej weryfikacji"] = "Nie potwierdzono bieżącego stanu kopii."
                 else:
                     disks.add(volume.physical_device)
@@ -179,6 +182,7 @@ def _fresh_copy_status(config: Configuration, group: str, files: dict[Path, Back
                     invalidated = True
                     proofs.clear()
                     for match in matches:
+                        match.read = None
                         match.report["błąd końcowej weryfikacji"] = "Nie potwierdzono bieżącego stanu źródła."
             readiness = "brak dwóch świeżych kopii"
             if len(proofs) == 2:
@@ -220,7 +224,8 @@ def _read_archive_copy(config: Configuration, group: str, copy: BackupCopy, stat
 def execute_backup_trial(config: Configuration, *, profile_id: str, targets: tuple[str, ...],
                          collection_id: str | None = None, month: str | None = None, pair: tuple[str, ...] = (),
                          copy_if_elsewhere: bool = False, replace_test: bool = False,
-                         approve_cleanup: Approval | None = None, parallel_test: bool = False) -> BackupPlan:
+                         approve_cleanup: Approval | None = None, parallel_test: bool = False,
+                         snapshot_test: bool = False) -> BackupPlan:
     if not profile_id or not targets:
         raise StateError("Próba BACKUP wymaga jawnego profilu i celów.")
     if approve_cleanup is not None and (month is not None or replace_test or parallel_test):
@@ -233,13 +238,16 @@ def execute_backup_trial(config: Configuration, *, profile_id: str, targets: tup
         Resource("archive", profile.archive_group_id),
         *(collection_resource(config, root.id) for root in config.profile_collections(profile.id)),
     })
-    with lock_resources(config.app.database_file, resources) as locks:
+    snapshot_resources = {Resource("archive", group.id) for group in config.archive_groups} if snapshot_test else set()
+    with lock_resources(config.app.database_file, resources | snapshot_resources) as locks:
+        settings = capture_backup_settings(config) if snapshot_test else None
         with open_database(config.app.database_file) as connection:
             require_reconciled(connection)
-        all_policies = parallel_test or approve_cleanup is not None
+        fresh = parallel_test or snapshot_test
+        all_policies = fresh or approve_cleanup is not None
         plan = plan_backup(config, profile_id=profile_id, collection_id=collection_id, month=month,
                            targets=targets, pair=pair, prepare_replacements=replace_test or all_policies,
-                           coordination_trial=parallel_test)
+                           coordination_trial=fresh)
         if plan.code:
             return plan
         policy = "replace_verified" if replace_test else "keep_both"
@@ -249,6 +257,15 @@ def execute_backup_trial(config: Configuration, *, profile_id: str, targets: tup
             return replace(plan, code=3, message=(
                 "Znaleziono historyczne kopie pod inną ścieżką. Sprawdź listę i ponów próbę z --copy-if-elsewhere."
             ))
+        recipients = ()
+        if snapshot_test:
+            group = config.archive_group(profile.archive_group_id)
+            selected = {DeviceKey("archive", alias, group.id) for alias in plan.details["Wybrane cele"]
+                        if group.target(alias).state == "active"}
+            recipients, capacity, blocked = preflight_snapshots(config, selected, len(candidates))
+            plan = replace(plan, details={**plan.details, "Pojemność snapshotów": capacity})
+            if blocked:
+                return replace(plan, code=3, message="Kontrola celów snapshotu zatrzymała BACKUP przed transferem.")
         queues: dict[str, list[BackupCopy]] = {alias: [] for alias in plan.details["Wybrane cele"]}
         for copy in candidates:
             queues[copy.target].append(copy)
@@ -284,7 +301,7 @@ def execute_backup_trial(config: Configuration, *, profile_id: str, targets: tup
                         continue
                     operation_id, proof_id, read = _run_copy(
                         config, profile.archive_group_id, files[copy.source], copy, locks, resources,
-                        fresh=parallel_test, cancelled=stop.is_set if use_workers else None, state_gate=state_gate,
+                        fresh=fresh, cancelled=stop.is_set if use_workers else None, state_gate=state_gate,
                     )
                 except KeyboardInterrupt:
                     interrupted.set()
@@ -302,7 +319,7 @@ def execute_backup_trial(config: Configuration, *, profile_id: str, targets: tup
                 else:
                     row["operacja"] = operation_id
                     row["wynik"] = {"verified": "zgodna", "replace": "zastąpiono"}.get(copy.action, "skopiowano")
-                    if read is not None and parallel_test:
+                    if read is not None and fresh:
                         outcome.read = read
                         row["dowód SHA-256"] = proof_id
             return outcomes
@@ -321,12 +338,46 @@ def execute_backup_trial(config: Configuration, *, profile_id: str, targets: tup
         results = [outcome.report for outcome in outcomes]
         details = {**plan.details, "Wyniki BACKUP": results}
         errors = any("błąd" in row or row.get("wynik") == "wstrzymano" for row in results)
-        if parallel_test:
+        if fresh:
+            errors = errors or set(targets) != queues.keys()
+        if fresh and not snapshot_test:
             rows, invalidated = _fresh_copy_status(config, profile.archive_group_id, files, outcomes)
             details["Stan kopii BACKUP"] = rows
-            errors = errors or invalidated or set(targets) != queues.keys()
+            errors = errors or invalidated
+        elif snapshot_test and approve_cleanup is not None and not errors and not interrupted.is_set():
+            _, invalidated = _fresh_copy_status(config, profile.archive_group_id, files, outcomes)
+            errors = errors or invalidated
         if interrupted.is_set():
             return replace(plan, code=130, message="Przerwano próbę BACKUP.", details=details)
+        if snapshot_test:
+            code = 3 if errors or space_failed.is_set() else 0
+            message = "Zakończono próbę BACKUP."
+            if space_failed.is_set():
+                message = "Zatrzymano transfery BACKUP na wszystkich celach. Brak miejsca."
+            elif errors:
+                message = "Próba BACKUP zakończona częściowo."
+            elif approve_cleanup is not None:
+                try:
+                    code, message, cleanup = execute_cleanup(config, profile, collection_id, tuple(queues), plan.files,
+                                                             approve_cleanup, locks)
+                except (ConfigError, StateError, OSError) as error:
+                    code, message = 3, "Transfery ukończono. Sprzątanie zatrzymane."
+                    cleanup = {"Błąd sprzątania": str(error) if isinstance(error, (ConfigError, StateError))
+                               else "Nie można bezpiecznie ukończyć sprzątania."}
+                details.update(cleanup)
+            if code != 130:
+                assert settings is not None
+                snapshots, failed = distribute_snapshot(config, recipients, settings)
+                details["Snapshoty BACKUP"] = snapshots
+                if failed:
+                    code = 3
+                    message += " Zapis snapshotu zakończył się częściowo."
+                rows, invalidated = _fresh_copy_status(config, profile.archive_group_id, files, outcomes)
+                details["Stan kopii BACKUP"] = rows
+                if invalidated:
+                    code = 3
+                    message += " Stan źródła lub kopii zmienił się przed końcową kontrolą."
+            return replace(plan, code=code, message=message, details=details)
         if space_failed.is_set():
             return replace(plan, code=3, message="Zatrzymano BACKUP na wszystkich celach. Brak miejsca.", details=details)
         if errors:
@@ -348,4 +399,6 @@ def execute_backup_trial(config: Configuration, *, profile_id: str, targets: tup
 
 def backup_retry_command(config: Configuration, operation_id: int) -> str | None:
     with open_database(config.app.database_file) as connection:
+        if journal.load_backup_supersession(connection, operation_id) is not None:
+            raise StateError("Bieżąca zweryfikowana kopia zastąpiła zamiar tej podmiany.")
         return journal.backup_retry_command(journal.load_operation(connection, operation_id))

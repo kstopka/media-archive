@@ -1,6 +1,6 @@
 # Confirmed BACKUP cleanup trial
 
-Use an isolated configuration, separate state database and test archives. Run `media-archive migrate` on the test database to install revision `0012`. Choose an explicit profile and targets and use the All scope for the profile or one of its root collections.
+Use an isolated configuration, separate state database and test archives. Run `media-archive migrate` on the test database to apply the current revision. Choose an explicit profile and targets and use the All scope for the profile or one of its root collections.
 
 ```bash
 media-archive --config fixture.env backup --cleanup-test --profile data --collection photos --targets a b

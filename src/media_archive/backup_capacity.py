@@ -59,6 +59,18 @@ def _path_key(path: Path) -> Path:
     return Path(unicodedata.normalize("NFC", path.as_posix()).casefold())
 
 
+def snapshot_sizes(config: Configuration, checks: int) -> tuple[int, int, int]:
+    with open_database(config.app.database_file) as connection:
+        page_size = connection.exec_driver_sql("PRAGMA main.page_size").scalar_one()
+        pages = connection.exec_driver_sql("PRAGMA main.page_count").scalar_one()
+    try:
+        settings = config.source_file.stat().st_size
+    except OSError:
+        raise StateError("Nie można oszacować wielkości konfiguracji w snapshocie.") from None
+    return (page_size * (pages + _ESTIMATED_HISTORY_PAGES_PER_CHECK * checks),
+            settings, 1024 + 6 * len(str(config.source_file).encode("utf-8")))
+
+
 def check_backup_capacity(
     config: Configuration, candidates: tuple["_Candidate", ...],
     selected: dict[str, MountedVolume], source_disks: set[str], devices: dict[str, int], proposed_pair: frozenset[int],
@@ -73,8 +85,6 @@ def check_backup_capacity(
         if schema_version(connection) < "0011":
             raise StateError("BACKUP wymaga aktualnej bazy. Użyj migrate.")
         assignments = history.load_backup_assignments(connection, {item.file.collection_id for item in candidates})
-        page_size = connection.exec_driver_sql("PRAGMA main.page_size").scalar_one()
-        pages = connection.exec_driver_sql("PRAGMA main.page_count").scalar_one()
     saved: dict[tuple[Path, int, str], dict[SourceDigest, set[RequiredPair]]] = {}
     for row in assignments:
         contents = saved.setdefault((Path(row.path), row.volume_id, row.collection_id), {})
@@ -85,11 +95,6 @@ def check_backup_capacity(
                   ((row.first_device_id, row.first_path), (row.second_device_id, row.second_path)) if path is not None),
         ))
 
-    try:
-        settings_bytes = config.source_file.stat().st_size
-    except OSError:
-        raise StateError("Nie można oszacować wielkości konfiguracji w snapshocie.") from None
-    manifest_bytes = 1024 + 6 * len(str(config.source_file).encode("utf-8"))
     budgets = {}
     for alias, volume in selected.items():
         if alias in proof_only:
@@ -223,10 +228,10 @@ def check_backup_capacity(
                 _issue(errors, path, error, alias=alias)
 
     # Every future transfer and recorded check can add history rows before the generation is taken.
-    database_bytes = page_size * (pages + _ESTIMATED_HISTORY_PAGES_PER_CHECK * len(copies))
+    sizes = snapshot_sizes(config, len(copies))
     capacity = []
     for alias, budget in budgets.items():
-        snapshot_bytes = (sum(map(budget.allocated, (database_bytes, settings_bytes, manifest_bytes)))
+        snapshot_bytes = (sum(map(budget.allocated, sizes))
                           + (budget.snapshot_parents + 1) * budget.unit)
         transfers = sum(budget.results[action] for action in ("copy", "replace", "conflict"))
         # One work directory is live at a time. Allow one block for each new directory entry.

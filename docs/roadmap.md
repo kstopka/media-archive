@@ -2,7 +2,7 @@
 
 This public roadmap tracks project milestones. Checkboxes mark completed milestones. For currently available behavior, see the [technical documentation](README.md).
 
-The CLI, configuration loader, SQLite lifecycle, persistent registration and [history APIs](history.md) are available. The CLI supports camera and phone import, SORT, catalog search and read-only BACKUP scope preview. Backup transfers and the configuration wizard remain planned. See the [SQLite state reference](state.md).
+The CLI, configuration loader, SQLite lifecycle, persistent registration and [history APIs](history.md) are available. The CLI supports camera and phone import, SORT, catalog search, read-only BACKUP scope preview and isolated BACKUP trials. Production BACKUP follows integrated hardware verification. The configuration wizard remains planned. See the [SQLite state reference](state.md).
 
 Design references: [archive workflows and state](design/archive-workflows.md) and [future configurator](design/configurator.md). Future module boundaries, database details and command syntax must be finalized during the relevant implementation task.
 
@@ -70,7 +70,7 @@ Target planning must persist each material occurrence's required pair. An explic
 - [x] **6.4 Controlled replacement.** The [isolated replacement trial](backup-replacement.md) applies only where policy permits it. It verifies new content before atomic publication and records fresh evidence.
 - [x] **6.5 Confirmed deletions.** The [isolated cleanup trial](backup-cleanup.md) requires All scope, explicit collection permission, exact per-target approval and fresh state validation. Missing sources, scan failures and changes after approval block cleanup.
 - [x] **6.6 Two-target coordination.** The [isolated coordination trial](backup-coordination.md) runs one queue per target, keeps successful copies and stops both queues on space exhaustion. It reports per-file copy counts and checks fresh evidence for manual space release.
-- [ ] **6.7 Snapshot/recovery integration.** Produce one consistent generation after recording backup results, saving it on connected registered writable archives outside audit roots. Keep five validated generations per target. Snapshot failure makes the run incomplete even if media succeeded; restore reconciles later file state.
+- [x] **6.7 Snapshot/recovery integration.** The [BACKUP snapshot trial](backup-snapshots.md) publishes one verified generation to admitted writable archives, keeps up to five valid generations per disk and reconciles known archive paths and pending operations after restore.
 
 Backup is ready for normal use only after the **entire stage**, including snapshots and recovery, is accepted. Earlier transfer components remain test-only.
 

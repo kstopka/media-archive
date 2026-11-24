@@ -15,14 +15,18 @@ from unittest.mock import patch
 
 from media_archive.backup_planning import plan_backup
 from media_archive.backup_execution import _fresh_copy_status, execute_backup_trial
+from media_archive.backup_snapshots import _publish, _required, distribute_snapshot
 from media_archive._transfer_files import Destination, Part
 from media_archive.cli import main
 from media_archive.config import ConfigError, load_config
 from media_archive.devices import VolumeUnavailable
+from media_archive.import_restore import reconcile_imports
 from media_archive.sources import LocalSource
 from media_archive.state import DeviceKey, StateError, history, journal, open_database, transaction
 from media_archive.state.catalog import load_locations
 from media_archive.state.registry import initialize_database, load_registered_devices, register_configuration
+from media_archive.state.reconciliation import load_reconciliation
+from media_archive.state.snapshots import restore_snapshot, validate_snapshot
 from tests.config_fixtures import registry_values, write_config
 from tests.test_import_planning import mounted
 
@@ -340,6 +344,208 @@ class BackupPlanningTests(unittest.TestCase):
               patch("media_archive.backup_execution.open_local_source", side_effect=self._backup_source)):
             return execute_backup_trial(self.config, profile_id="data", targets=targets, collection_id=collection_id,
                                         parallel_test=True)
+
+    def _snapshot_backup(self, targets=("a", "b"), collection_id="documents"):
+        with (patch("media_archive.transfer.verify_volume", side_effect=self._verify_volume),
+              patch("media_archive.backup_execution.verify_volume", side_effect=self._verify_volume),
+              patch("media_archive.backup_execution.open_local_source", side_effect=self._backup_source),
+              patch("media_archive.backup_snapshots.verify_volume", side_effect=self._verify_volume)):
+            return execute_backup_trial(self.config, profile_id="data", targets=targets,
+                                        collection_id=collection_id, snapshot_test=True)
+
+    def _snapshot_root(self, alias):
+        return self.config.archive_group("data").target(alias).mount / self.config.app.archive_state_dir
+
+    def _reconcile_backup(self):
+        with (patch("media_archive.import_restore.verify_volume", side_effect=self._verify_volume),
+              patch("media_archive.backup_restore.verify_volume", side_effect=self._verify_volume)):
+            return reconcile_imports(self.config)
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_snapshot_backup_preflights_extra_recipients_and_distributes_identical_state(self) -> None:
+        self.connected.add(("data", "b"))
+        source = self._file("documents", "report.pdf")
+
+        def full(destination, sizes):
+            if destination.volume.root == self.config.archive_group("data").target("b").mount:
+                return 0, 4096
+            return _required(destination, sizes)
+
+        with patch("media_archive.backup_snapshots._required", side_effect=full):
+            blocked = self._snapshot_backup(("a",))
+        self.assertEqual(blocked.code, 3, blocked.details)
+        self.assertFalse(self._snapshot_root("a").exists())
+        self.assertFalse((self._snapshot_root("a").parent / "Data" / "Documents").exists())
+
+        plan = self._snapshot_backup(("a",))
+        self.assertEqual(plan.code, 0, plan.details)
+        self.assertEqual(plan.details["Stan kopii BACKUP"][0]["status kopii"], "1/2")
+        first, second = [self._snapshot_root(row["cel"]) / row["generacja"]
+                         for row in plan.details["Snapshoty BACKUP"]]
+        self.assertEqual(first.name, second.name)
+        self.assertEqual(validate_snapshot(first), validate_snapshot(second))
+        self.assertEqual({item.name: item.read_bytes() for item in first.iterdir()},
+                         {item.name: item.read_bytes() for item in second.iterdir()})
+        with open_database(first / "state.sqlite3") as connection:
+            location, = history.load_occurrences(connection, "local", str(source))
+            self.assertEqual(len(history.load_archive_copies(connection, location.id)), 1)
+
+    def test_snapshot_backup_rotates_only_valid_generations_after_publication(self) -> None:
+        results = [self._snapshot_backup(("a",)) for _ in range(5)]
+        self.assertTrue(all(result.code == 0 for result in results), results)
+        root = self._snapshot_root("a")
+        foreign = root / ("snapshot-" + "0" * 32)
+        self._write(foreign / "keep", b"foreign")
+        with patch("media_archive.backup_snapshots._sync_generation", side_effect=OSError("sync")):
+            partial = self._snapshot_backup(("a",))
+        self.assertEqual(partial.code, 3, partial.details)
+        self.assertEqual(len(list(root.iterdir())), 6)
+        last = self._snapshot_backup(("a",))
+        self.assertEqual(last.code, 0, last.details)
+        self.assertEqual(len(list(root.iterdir())), 6)
+        first_name = results[0].details["Snapshoty BACKUP"][0]["generacja"]
+        self.assertFalse((root / first_name).exists())
+        self.assertEqual((foreign / "keep").read_bytes(), b"foreign")
+
+    def test_snapshot_backup_cli_creates_generation_at_archive_root(self) -> None:
+        with (redirect_stdout(StringIO()), redirect_stderr(StringIO()),
+              patch("media_archive.backup_snapshots.verify_volume", side_effect=self._verify_volume)):
+            code = main(["--config", str(self.settings), "backup", "--snapshot-test",
+                         "--profile", "data", "--targets", "a", "--collection", "documents"])
+        self.assertEqual(code, 0)
+        generation, = self._snapshot_root("a").iterdir()
+        self.assertEqual(generation.name, f"snapshot-{validate_snapshot(generation).generation_id}")
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_snapshot_backup_keeps_media_and_other_generation_if_one_publication_fails(self) -> None:
+        self.connected.add(("data", "b"))
+        self._file("documents", "report.pdf")
+
+        def fail_b(config, key, source, generation):
+            if key.alias == "b":
+                raise StateError("Błąd zapisu B.")
+            return _publish(config, key, source, generation)
+
+        with patch("media_archive.backup_snapshots._publish", side_effect=fail_b):
+            result = self._snapshot_backup()
+        self.assertEqual(result.code, 3, result.details)
+        self.assertEqual(result.details["Stan kopii BACKUP"][0]["status kopii"], "2/2")
+        first, second = result.details["Snapshoty BACKUP"]
+        validate_snapshot(self._snapshot_root("a") / first["generacja"])
+        self.assertIn("Błąd zapisu", second["błąd"])
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_snapshot_backup_rechecks_fresh_copies_after_snapshot_publication(self) -> None:
+        self.connected.add(("data", "b"))
+        source = self._file("photos", "example.jpg", b"initial")
+
+        def edit_during_snapshot(*args):
+            source.write_bytes(b"changed")
+            return distribute_snapshot(*args)
+
+        with patch("media_archive.backup_execution.distribute_snapshot", side_effect=edit_during_snapshot):
+            result = self._snapshot_backup(collection_id="photos")
+        self.assertEqual(result.code, 3, result.details)
+        self.assertEqual(result.details["Stan kopii BACKUP"][0]["status kopii"], "0/2")
+        self.assertTrue(all(row["stan"] == "zweryfikowano i zapisano" for row in result.details["Snapshoty BACKUP"]))
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_restore_backup_snapshot_reconciles_later_archive_content(self) -> None:
+        self.connected.add(("data", "b"))
+        source = self._file("documents", "report.pdf", b"previous")
+        first = self._snapshot_backup()
+        self.assertEqual(first.code, 0, first.details)
+        generation = self._snapshot_root("a") / first.details["Snapshoty BACKUP"][0]["generacja"]
+        self._write(source, b"edited")
+        later = self._snapshot_backup()
+        self.assertEqual(later.code, 0, later.details)
+        restore_snapshot(self.config, generation)
+        result = self._reconcile_backup()
+        self.assertEqual(result["Nowe treści na znanych ścieżkach BACKUP"], 2)
+        with open_database(self.database) as connection:
+            self.assertIsNone(load_reconciliation(connection))
+            present = [row for row in load_locations(connection, None, None)
+                       if row.kind == "archive" and row.present]
+            self.assertEqual([row.sha256 for row in present], [sha256(b"edited").hexdigest()] * 2)
+        with patch.object(Part, "rsync_from", side_effect=AssertionError("Kopie już istnieją.")):
+            final = self._snapshot_backup()
+        self.assertEqual(final.code, 0, final.details)
+        self.assertEqual(final.details["Stan kopii BACKUP"][0]["status kopii"], "2/2")
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_restore_backup_snapshot_completes_a_published_pending_attempt(self) -> None:
+        self._file("documents", "report.pdf", b"published")
+        with patch("media_archive.transfer.journal.commit_result", side_effect=StateError("Błąd zapisu wyniku.")):
+            partial = self._snapshot_backup(("a",))
+        self.assertEqual(partial.code, 3, partial.details)
+        generation = self._snapshot_root("a") / partial.details["Snapshoty BACKUP"][0]["generacja"]
+        restore_snapshot(self.config, generation)
+        self.connected.clear()
+        with self.assertRaisesRegex(StateError, "Podłącz wolumin archiwalny"):
+            self._reconcile_backup()
+        with open_database(self.database) as connection:
+            self.assertIsNotNone(load_reconciliation(connection))
+        self.connected.add(("data", "a"))
+        result = self._reconcile_backup()
+        self.assertEqual(result["Zatwierdzone próby BACKUP"], 1)
+        with open_database(self.database) as connection:
+            self.assertEqual(journal.load_unfinished(connection), ())
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_restore_backup_snapshot_closes_superseded_replacement_with_current_working_copy(self) -> None:
+        source = self._file("documents", "report.pdf", b"v1")
+        self.assertEqual(self._snapshot_backup(("a",)).code, 0)
+        source.write_bytes(b"v2")
+        with patch("media_archive.transfer.journal.commit_result", side_effect=StateError("Błąd zapisu wyniku.")):
+            partial = self._snapshot_backup(("a",))
+        self.assertEqual(partial.code, 3, partial.details)
+        generation = self._snapshot_root("a") / partial.details["Snapshoty BACKUP"][0]["generacja"]
+        source.write_bytes(b"v3")
+        latest = self._snapshot_backup(("a",))
+        self.assertEqual(latest.code, 0, latest.details)
+        restore_snapshot(self.config, generation)
+        with open_database(self.database) as connection:
+            pending, = journal.load_unfinished(connection)
+        source.write_bytes(b"unrelated")
+        with self.assertRaisesRegex(StateError, "wymaga sprawdzenia treści celu"):
+            self._reconcile_backup()
+        with open_database(self.database) as connection:
+            self.assertIsNotNone(load_reconciliation(connection))
+        source.write_bytes(b"v3")
+        result = self._reconcile_backup()
+        self.assertEqual(result["Zastąpione zamiary BACKUP"], [pending.id])
+        with open_database(self.database) as connection:
+            self.assertEqual(journal.load_unfinished(connection), ())
+            self.assertIsNotNone(journal.load_backup_supersession(connection, pending.id))
+            self.assertTrue(all(row.state != "committed" for row in journal.load_attempts(connection, pending.id)))
+        source.write_bytes(b"v2")
+        result = self._snapshot_backup(("a",))
+        self.assertEqual(result.code, 0, result.details)
+        self.assertNotEqual(result.details["Wyniki BACKUP"][0]["operacja"], pending.id)
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_restore_backup_snapshot_checks_archive_paths_verified_without_transfer(self) -> None:
+        self._file("photos", "readonly.jpg", b"media")
+        self.assertEqual(self._snapshot_backup(("a",), collection_id="photos").code, 0)
+        self.connected.add(("data", "b"))
+        self._archive_file("data", "b", "photos", "readonly.jpg", b"media")
+        contents = self.settings.read_text(encoding="utf-8")
+        self.settings.write_text(contents.replace("ARCHIVE_DATA_TARGET_B_STATE='active'",
+                                                  "ARCHIVE_DATA_TARGET_B_STATE='read_only'"), encoding="utf-8")
+        self.config = load_config(self.settings)
+        result = self._snapshot_backup(collection_id="photos")
+        self.assertEqual(result.code, 0, result.details)
+        self.assertEqual(result.details["Stan kopii BACKUP"][0]["status kopii"], "2/2")
+        group = self.config.archive_group("data")
+        archive = group.target("b").mount / group.root_relative / self.config.collection("photos").archive_relative
+        (archive / "readonly.jpg").unlink()
+        generation = self._snapshot_root("a") / result.details["Snapshoty BACKUP"][0]["generacja"]
+        restore_snapshot(self.config, generation)
+        self.assertEqual(self._reconcile_backup()["Sprawdzone ścieżki BACKUP"], 2)
+        with open_database(self.database) as connection:
+            missing, = [row for row in load_locations(connection, None, None)
+                        if row.kind == "archive" and row.alias == "b" and row.path.endswith("/readonly.jpg")]
+            self.assertEqual(missing.present, 0)
 
     @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
     def test_parallel_backup_overlaps_transfers_and_reuses_their_full_reads(self) -> None:

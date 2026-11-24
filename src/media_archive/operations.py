@@ -8,7 +8,9 @@ from media_archive._encoding import require_utf8
 from media_archive.config import ConfigError, Configuration
 from media_archive.devices import inspect_volume, registered_volume, verify_volume
 from media_archive.state import DeviceKey, StateError, migrate_database, open_database, schema_version, sort_moves
-from media_archive.state.journal import backup_retry_command, load_attempts, load_operation, load_unfinished, recommended_recovery
+from media_archive.state.journal import (
+    backup_retry_command, load_attempts, load_backup_supersession, load_operation, load_unfinished, recommended_recovery,
+)
 from media_archive.state.migrations import _head_revision
 from media_archive.state.reconciliation import load_reconciliation
 from media_archive.state.registry import change_registered_volume, initialize_database, validate_registered_configuration
@@ -139,6 +141,8 @@ def pending(config: Configuration, operation_id: int | None = None) -> dict[str,
         reconcile_first = "Przed wznowieniem uzgodnij przywrócony stan z nośnikami przez reconcile."
         result = []
         for operation in operations:
+            if operation_id is not None and load_backup_supersession(connection, operation.id) is not None:
+                raise StateError("Bieżąca zweryfikowana kopia zastąpiła zamiar tej podmiany.")
             attempts = load_attempts(connection, operation.id)
             last = attempts[-1] if attempts else None
             if last is not None and last.state == "committed" and operation.id not in cleanup:

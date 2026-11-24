@@ -172,6 +172,27 @@ def _backup_database(source: Connection, destination: Path) -> None:
         source.connection.driver_connection.backup(target, pages=256, progress=check_progress, sleep=0.1)
 
 
+def prepare_snapshot(config: Configuration, directory: Path, *, settings: bytes | None = None) -> Generation:
+    """Build one synchronized generation in an empty private directory."""
+    with open_database(config.app.database_file) as source:
+        if settings is None:
+            _copy_private(config.source_file, directory / _CONFIG)
+        else:
+            _write_private(directory / _CONFIG, settings)
+        _backup_database(source, directory / _DATABASE)
+    revision = _validate_database(directory / _DATABASE, _captured_config(directory, config.source_file))
+    if revision == "0001":
+        raise StateError("Przed utworzeniem snapshotu zaktualizuj bazę do rewizji z rejestrem.")
+    generation = Generation(
+        uuid4().hex, _now(), revision, _digest(directory / _DATABASE), _digest(directory / _CONFIG),
+        str(config.source_file),
+    )
+    manifest = json.dumps({"format": _FORMAT, **asdict(generation)}, ensure_ascii=False, indent=2)
+    _write_private(directory / _MANIFEST, (manifest + "\n").encode("utf-8"))
+    _sync_generation(directory)
+    return generation
+
+
 def create_snapshot(config: Configuration, directory: Path) -> Path:
     """Publish a verified generation under an existing, trusted output directory."""
     validate_relationships(config)
@@ -181,20 +202,9 @@ def create_snapshot(config: Configuration, directory: Path) -> Path:
         raise StateError("Katalog snapshotu koliduje z konfiguracją, stanem, raportami lub ścieżką danych.")
     database = _database_path(config.app.database_file)
     try:
-        with open_database(database) as source, TemporaryDirectory(prefix=".snapshot-", dir=directory) as temporary:
+        with installation_lock(database), TemporaryDirectory(prefix=".snapshot-", dir=directory) as temporary:
             staged = Path(temporary)
-            _copy_private(config.source_file, staged / _CONFIG)
-            _backup_database(source, staged / _DATABASE)
-            revision = _validate_database(staged / _DATABASE, _captured_config(staged, config.source_file))
-            if revision == "0001":
-                raise StateError("Przed utworzeniem snapshotu zaktualizuj bazę do rewizji z rejestrem.")
-            generation = Generation(
-                uuid4().hex, _now(), revision, _digest(staged / _DATABASE), _digest(staged / _CONFIG),
-                str(config.source_file),
-            )
-            manifest = json.dumps({"format": _FORMAT, **asdict(generation)}, ensure_ascii=False, indent=2)
-            _write_private(staged / _MANIFEST, (manifest + "\n").encode("utf-8"))
-            _sync_generation(staged)
+            generation = prepare_snapshot(config, staged)
             published = directory / f"snapshot-{generation.generation_id}"
             if published.exists() or published.is_symlink():
                 raise StateError("Generacja o tym identyfikatorze już istnieje.")
