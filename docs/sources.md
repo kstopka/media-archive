@@ -29,7 +29,7 @@ Paths are relative to the configured source root. Names must be UTF-8 and may co
 
 ADB reports timestamps to the second. The local adapter exposes nanosecond timestamps from the filesystem, whose actual resolution can be coarser. A directory listing and a subsequent read are separate observations. The ADB adapter checks path components on Android using its shell and cannot make those checks atomic with a concurrent rename on the phone.
 
-A disabled or mismatched profile raises `ConfigError`. An unavailable source, authorization failure, unsafe path, malformed listing or interrupted read raises `StateError`. ADB metadata calls and idle reads have a 30-second timeout. Error messages omit private device identifiers and paths. A stream can yield bytes before a later ADB failure, so consumers must treat the read as complete only after successful exhaustion.
+A disabled or mismatched profile raises `ConfigError`. An unavailable source, authorization failure, unsafe path, malformed listing or interrupted read raises `StateError`. ADB connection and single-file attribute commands have a 30-second limit. Directory listings and file reads time out after 30 seconds without new data. An ADB directory listing can report the number of records received so far through `progress`. Counts describe received records. The listing is accepted only after a successful command exit and validation of all records. Error messages omit private device identifiers and paths.
 
 ## Hash a source file
 

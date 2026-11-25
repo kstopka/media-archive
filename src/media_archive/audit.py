@@ -1,5 +1,6 @@
 """Compare metadata across two registered archive volumes."""
 
+from collections.abc import Callable
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -42,11 +43,15 @@ class QuickAudit:
     details: dict[str, object]
 
 
-def _scan(source: LocalSource | AdbSource, scan: _Scan) -> None:
+def _scan(source: LocalSource | AdbSource, scan: _Scan, *, listing_progress: Callable[[int], None] | None = None,
+          on_directory: Callable[[tuple[SourceEntry, ...]], None] | None = None) -> None:
     while scan.pending:
         directory = scan.pending[-1]
         try:
-            children = source.list_directory(directory)
+            if listing_progress is not None and isinstance(source, AdbSource):
+                children = source.list_directory(directory, progress=listing_progress)
+            else:
+                children = source.list_directory(directory)
         except StateError as error:
             scan.errors[directory] = str(error)
             scan.pending.pop()
@@ -57,6 +62,8 @@ def _scan(source: LocalSource | AdbSource, scan: _Scan) -> None:
                              if not (stat.S_ISDIR(entry.mode) and is_transfer_part(entry.path.name)))
         scan.entries.update((entry.path, entry) for entry in children)
         scan.pending[-1:] = [entry.path for entry in children if stat.S_ISDIR(entry.mode)]
+        if on_directory is not None:
+            on_directory(children)
 
 
 def _compare(first: _Scan, second: _Scan) -> tuple[int, list[dict[str, object]]]:

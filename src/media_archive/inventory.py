@@ -10,10 +10,11 @@ from time import monotonic
 from typing import Literal
 from uuid import NAMESPACE_URL, uuid5
 
+from media_archive._progress import format_count, format_size
 from media_archive.audit import _Scan, _scan
 from media_archive.config import Configuration
 from media_archive.devices import VolumeUnavailable, registered_volume
-from media_archive.sources import hash_source_file, open_local_source
+from media_archive.sources import SourceEntry, hash_source_file, open_local_source
 from media_archive.state import DeviceKey, StateError, open_database, validate_registered_configuration
 from media_archive.state.inventory import InventoryFile, save_scope, scope_file_count
 from media_archive.state.locking import Resource, collection_resource, lock_resources
@@ -79,9 +80,22 @@ def local_hash_run_id(config: Configuration, collection_id: str) -> str | None:
 def _read_scope(config: Configuration, scope: _Scope, hash_files: bool, announce: Callable[[str], None],
                 errors: list[dict[str, str]]) -> list[InventoryFile]:
     files = []
+    directories = scanned_files = 0
+    last_message = monotonic()
+
+    def on_directory(entries: tuple[SourceEntry, ...]) -> None:
+        nonlocal directories, scanned_files, last_message
+        directories += 1
+        scanned_files += sum(stat.S_ISREG(entry.mode) for entry in entries)
+        now = monotonic()
+        if now - last_message >= 1:
+            announce(f"{scope.label} · skan metadanych · katalogi {format_count(directories)} · "
+                     f"pliki {format_count(scanned_files)}")
+            last_message = now
+
     with open_local_source(config, scope.key, scope=scope.root) as source:
         scan = _Scan()
-        _scan(source, scan)
+        _scan(source, scan, on_directory=on_directory)
         for _, root in scope.collections:
             path = root.relative_to(scope.root)
             if path not in scan.observed_at and scan.covers(path):
@@ -99,12 +113,12 @@ def _read_scope(config: Configuration, scope: _Scope, hash_files: bool, announce
             nonlocal last_message
             now = monotonic()
             if now - last_message >= 1:
-                announce(f"{scope.label} · pliki {len(files)}/{len(regular)} · "
-                         f"bajty {completed_bytes + read}/{total_bytes}")
+                announce(f"{scope.label} · pliki {format_count(len(files))}/{format_count(len(regular))} · "
+                         f"odczytano {format_size(completed_bytes + read)} / {format_size(total_bytes)}")
                 last_message = now
 
         if hash_files:
-            announce(f"{scope.label} · SHA-256: {len(regular)} plików, {total_bytes} bajtów.")
+            announce(f"{scope.label} · SHA-256: {format_count(len(regular))} plików, {format_size(total_bytes)}.")
         for entry in regular:
             path = scope.history_root / entry.path
             owner = next((name for name, root in scope.collections if path.is_relative_to(root)), None)
@@ -158,6 +172,7 @@ def inventory(config: Configuration, *, hash_local: bool, announce: Callable[[st
                         if errors:
                             result["błędy odczytu"] = errors
                             continue
+                        announce(f"{scope.label} · zapis spisu · pliki {format_count(len(files))}")
                         save_scope(connection, run_id, scope.kind, volume_id, files)
                         count = len(files)
                     result.update({"stan": "ukończono", "ID obserwacji": run_id, "pliki": count})

@@ -15,6 +15,7 @@ from sqlalchemy.engine import Connection
 from media_archive._encoding import require_utf8
 from media_archive._media_formats import CAMERA_MEDIA, PHONE_MEDIA, media_extension
 from media_archive._transfer_files import Destination, TransferConflict
+from media_archive._progress import format_count, format_size
 from media_archive.audit import _Scan, _scan
 from media_archive.config import ConfigError, Configuration
 from media_archive.devices import registered_volume, staging_volume, verify_volume
@@ -182,14 +183,15 @@ def _read_manifest(config: Configuration, profile: str, selection: _Selection, m
         problems = ["Nie ukończono listowania źródła: " + error for error in scan.errors.values()]
         entries = sorted((entry for entry in scan.entries.values() if not stat.S_ISDIR(entry.mode)),
                          key=lambda entry: (entry.path not in requested, entry.path))
-        announce(f"Źródło {profile} · wpisy do sprawdzenia: {len(entries)}.")
+        announce(f"Źródło {profile} · wpisy do sprawdzenia: {format_count(len(entries))}.")
         last = monotonic()
 
         def progress(read: int, total: int) -> None:
             nonlocal last
             now = monotonic()
             if now - last >= 1:
-                announce(f"Źródło {profile} · wpis {index}/{len(entries)} · bajty pliku {read}/{total}.")
+                announce(f"Źródło {profile} · wpis {format_count(index)}/{format_count(len(entries))} · "
+                         f"odczytano {format_size(read)} / {format_size(total)}.")
                 last = now
 
         for index, entry in enumerate(entries, start=1):

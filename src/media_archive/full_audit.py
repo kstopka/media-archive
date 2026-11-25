@@ -11,6 +11,7 @@ from time import monotonic
 
 from sqlalchemy.engine import Connection, RowMapping
 
+from media_archive._progress import format_count, format_size
 from media_archive.audit import QuickAudit, _Scan, _compare, _scan, _select_targets
 from media_archive.config import ArchiveTarget, ConfigError, Configuration
 from media_archive.devices import VolumeUnavailable, registered_volume
@@ -95,11 +96,11 @@ def _hash_side(connection: Connection, run_id: str, root: Path, side: _Side,
         nonlocal last_message
         now = monotonic()
         if now - last_message >= 1:
-            announce(f"Nośnik {side.state.alias} · pliki {len(side.hashes)}/{len(files)} · "
-                     f"bajty {committed_bytes + read}/{total_bytes}")
+            announce(f"Nośnik {side.state.alias} · pliki {format_count(len(side.hashes))}/{format_count(len(files))} · "
+                     f"odczytano {format_size(committed_bytes + read)} / {format_size(total_bytes)}")
             last_message = now
 
-    announce(f"Nośnik {side.state.alias} · do sprawdzenia {len(files)} plików, {total_bytes} bajtów.")
+    announce(f"Nośnik {side.state.alias} · do sprawdzenia {format_count(len(files))} plików, {format_size(total_bytes)}.")
     for path, entry in files.items():
         old = stored.get(path)
         if old is not None and old.attributes != _attributes(entry):
@@ -139,7 +140,7 @@ def _hash_side(connection: Connection, run_id: str, root: Path, side: _Side,
         update_full_audit_target(connection, run_id, side.state.position, inventory=_save_inventory(side),
                                  scanned_at=scanned_at, hardware=json.dumps(side.hardware))
         side.scanned_at = scanned_at
-    announce(f"Nośnik {side.state.alias} · sprawdzono {len(side.hashes)}/{len(files)} plików.")
+    announce(f"Nośnik {side.state.alias} · sprawdzono {format_count(len(side.hashes))}/{format_count(len(files))} plików.")
 
 
 def _distinct(sides: list[_Side], previously_confirmed: bool) -> bool:

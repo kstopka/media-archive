@@ -2,6 +2,7 @@
 
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from io import StringIO
+from itertools import count
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
+from media_archive._progress import format_count, format_size
 from media_archive.cli import main
 from media_archive.config import load_config
 from media_archive.devices import MountedVolume, VolumeUnavailable, _mount_id
@@ -85,6 +87,29 @@ class InventoryTests(unittest.TestCase):
                 path = root / relative / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(data)
+
+    def test_progress_formats_counts_and_decimal_sizes(self) -> None:
+        self.assertEqual(format_count(1_000_000), "1 000 000")
+        self.assertEqual(format_size(987), "987 B")
+        self.assertEqual(format_size(1_500), "1,50 KB")
+        self.assertEqual(format_size(125_577_467), "125,58 MB")
+        self.assertEqual(format_size(44_677_424_429), "44,68 GB")
+        self.assertEqual(format_size(1_528_784_980_409), "1,53 TB")
+
+    def test_archive_inventory_announces_metadata_scan_and_save(self) -> None:
+        archive = self.archives[DeviceKey("archive", "a", "data")]
+        folder = archive / "subfolder"
+        folder.mkdir()
+        (folder / "photo.jpg").touch()
+        clock = count()
+        progress = StringIO()
+        with (patch("media_archive.inventory.monotonic", side_effect=lambda: next(clock)),
+              redirect_stdout(StringIO()), redirect_stderr(progress),
+              patch("media_archive.inventory.hash_source_file", side_effect=AssertionError("opened file"))):
+            code = main(["--config", str(self.settings), "inventory"])
+        self.assertEqual(code, 0, progress.getvalue())
+        self.assertIn("archiwum data/a · skan metadanych · katalogi 2 · pliki 1", progress.getvalue())
+        self.assertIn("archiwum data/a · zapis spisu · pliki 1", progress.getvalue())
 
     def test_inventory_resumes_across_archives_and_records_nested_ownership(self) -> None:
         a, b, video_a, video_b = self.archives

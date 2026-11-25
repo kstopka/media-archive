@@ -10,6 +10,7 @@ import select
 import shlex
 import stat
 import subprocess
+from tempfile import TemporaryFile
 from typing import BinaryIO
 
 from media_archive._encoding import require_utf8
@@ -188,6 +189,8 @@ def _adb(arguments: list[str], *, reject_stderr: bool = False) -> bytes:
     try:
         result = subprocess.run(["adb", *arguments], capture_output=True, stdin=subprocess.DEVNULL,
                                 timeout=_ADB_TIMEOUT, check=False)
+    except subprocess.TimeoutExpired:
+        raise StateError("Upłynął limit czasu polecenia ADB.") from None
     except (OSError, subprocess.SubprocessError):
         raise StateError("Nie można uruchomić lub zakończyć polecenia ADB.") from None
     if result.returncode or (reject_stderr and result.stderr):
@@ -248,9 +251,21 @@ class AdbSource:
         command = shlex.join(["sh", "-c", script, "sh", str(self._root), *parts])
         return ["-s", self._serial, "shell", "-T", "-n", command]
 
-    def list_directory(self, path: Path = Path(".")) -> tuple[SourceEntry, ...]:
+    def list_directory(self, path: Path = Path("."), *,
+                       progress: Callable[[int], None] | None = None) -> tuple[SourceEntry, ...]:
         path = _relative(path)
-        return _remote_listing(path, _adb(self._shell(_ENTER + _LIST, *path.parts), reject_stderr=True))
+        data = bytearray()
+        fields = 0
+        with TemporaryFile() as errors, _adb_stream(self._shell(_ENTER + _LIST, *path.parts), stderr=errors) as chunks:
+            for chunk in chunks:
+                data.extend(chunk)
+                if progress is not None:
+                    fields += chunk.count(b"\0")
+                    progress(fields // 2)
+            errors.seek(0)
+            if errors.read(1):
+                raise StateError("ADB nie ukończyło odczytu źródła.")
+        return _remote_listing(path, bytes(data))
 
     def attributes(self, path: Path) -> SourceEntry:
         path = _relative(path)
@@ -264,18 +279,23 @@ class AdbSource:
         if expected is not None:
             metadata = (f"{expected.mode:x} {expected.size} {expected.modified_ns // 1_000_000_000} "
                         f"{expected.changed_ns // 1_000_000_000} {expected.device} {expected.inode}")
-        command = self._shell(_READ, path.name or ".", metadata, *path.parent.parts)
+        with _adb_stream(self._shell(_READ, path.name or ".", metadata, *path.parent.parts)) as chunks:
+            yield chunks
+
+
+@contextmanager
+def _adb_stream(command: list[str], *, stderr: BinaryIO | int = subprocess.DEVNULL
+                ) -> Generator[Iterator[bytes], None, None]:
+    try:
+        process = subprocess.Popen(["adb", *command], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=stderr)
+    except OSError:
+        raise StateError("Nie można uruchomić odczytu danych przez ADB.") from None
+    with process:
         try:
-            process = subprocess.Popen(["adb", *command], stdin=subprocess.DEVNULL,
-                                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        except OSError:
-            raise StateError("Nie można uruchomić odczytu pliku przez ADB.") from None
-        with process:
-            try:
-                yield _read_remote(process)
-            finally:
-                if process.poll() is None:
-                    process.kill()
+            yield _read_remote(process)
+        finally:
+            if process.poll() is None:
+                process.kill()
 
 
 def _read_remote(process: subprocess.Popen[bytes]) -> Iterator[bytes]:
@@ -288,11 +308,11 @@ def _read_remote(process: subprocess.Popen[bytes]) -> Iterator[bytes]:
             chunk = os.read(descriptor, _CHUNK_SIZE)
             if not chunk:
                 if process.wait(timeout=_ADB_TIMEOUT) != 0:
-                    raise StateError("ADB przerwało odczyt pliku.")
+                    raise StateError("ADB przerwało odczyt danych.")
                 return
             yield chunk
     except (OSError, subprocess.TimeoutExpired):
-        raise StateError("Nie można ukończyć odczytu pliku przez ADB.") from None
+        raise StateError("Nie można ukończyć odczytu danych przez ADB.") from None
     raise StateError("Przekroczono czas oczekiwania na dane z ADB.")
 
 

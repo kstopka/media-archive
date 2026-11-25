@@ -13,6 +13,7 @@ from time import monotonic
 from sqlalchemy.engine import Connection
 
 from media_archive._media_formats import PHONE_MEDIA, media_extension
+from media_archive._progress import format_count, format_size
 from media_archive.audit import _Scan, _scan
 from media_archive.config import ArchiveGroup, ConfigError, Configuration, PhoneProfile
 from media_archive.devices import registered_volume
@@ -65,9 +66,19 @@ def _capture(config: Configuration, phone: PhoneProfile, source_id: int, connect
         raise StateError("Telefon wymaga rejestracji.")
     scope = phone.device.camera_dir
     files = []
+    announce(f"Telefon {phone.alias} · sprawdzanie połączenia ADB i listowanie katalogu.")
     with open_adb_source(config, phone.alias) as source:
         scan = _Scan()
-        _scan(source, scan)
+        last_listing = monotonic()
+
+        def listing_progress(listed: int) -> None:
+            nonlocal last_listing
+            now = monotonic()
+            if now - last_listing >= 1:
+                announce(f"Telefon {phone.alias} · listowanie · wpisy {format_count(len(scan.entries) + listed)}")
+                last_listing = now
+
+        _scan(source, scan, listing_progress=listing_progress)
         if scan.errors:
             raise StateError("Nie ukończono listowania katalogu telefonu: " + next(iter(scan.errors.values())))
         regular = [entry for entry in scan.entries.values() if stat.S_ISREG(entry.mode)]
@@ -81,15 +92,17 @@ def _capture(config: Configuration, phone: PhoneProfile, source_id: int, connect
             nonlocal last
             now = monotonic()
             if now - last >= 1:
-                announce(f"Telefon {phone.alias} · pliki {len(files)}/{len(supported)} · bajty {done + read}/{total}")
+                announce(f"Telefon {phone.alias} · pliki {format_count(len(files))}/{format_count(len(supported))} · "
+                         f"odczytano {format_size(done + read)} / {format_size(total)}")
                 last = now
 
-        announce(f"Telefon {phone.alias} · do odczytu {len(supported)} plików, {total} bajtów.")
+        announce(f"Telefon {phone.alias} · do odczytu {format_count(len(supported))} plików, {format_size(total)}.")
         for entry in supported:
             digest = hash_source_file(source, entry.path, expected=entry, progress=progress)
             files.append((entry, digest, datetime.now(timezone.utc)))
             done += digest.size
 
+    announce(f"Telefon {phone.alias} · zapis spisu · pliki {format_count(len(files))}/{format_count(len(supported))}.")
     with transaction(connection):
         run_id = create_run(connection)
         start_initialization(

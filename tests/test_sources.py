@@ -296,13 +296,29 @@ esac
             with self.assertRaisesRegex(StateError, "UTF-8"):
                 source.list_directory()
             status.write_text("disconnected", encoding="utf-8")
-            with self.assertRaisesRegex(StateError, "nie ukończyło"):
+            with self.assertRaisesRegex(StateError, "przerwało"):
                 source.list_directory()
             status.write_text("partial", encoding="utf-8")
             with source.read_chunks(Path("image.jpg")) as chunks:
                 self.assertEqual(next(chunks), b"partial")
                 with self.assertRaisesRegex(StateError, "przerwało"):
                     next(chunks)
+
+    def test_adb_listing_keeps_reading_while_new_records_arrive(self) -> None:
+        self._fake_adb()
+        command = shutil.which("stat")
+        stat_tool = self.root / "stat"
+        stat_tool.write_text(f'#!/bin/sh\nsleep 0.4\nexec "{command}" "$@"\n', encoding="utf-8")
+        stat_tool.chmod(0o700)
+        for number in range(4):
+            (self.android / f"{number}.jpg").touch()
+
+        counts = []
+        with patch("media_archive.sources._ADB_TIMEOUT", 1), open_adb_source(self.config, "main") as source:
+            entries = source.list_directory(progress=counts.append)
+        self.assertEqual(len(entries), 4)
+        self.assertEqual(counts[-1], 4)
+        self.assertTrue(any(0 < count < 4 for count in counts))
 
     def test_adb_reads_pipe_above_select_descriptor_limit(self) -> None:
         limit, _ = resource.getrlimit(resource.RLIMIT_NOFILE)

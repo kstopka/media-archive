@@ -11,6 +11,7 @@ import shutil
 from tempfile import TemporaryDirectory
 from uuid import uuid4
 
+from media_archive._progress import format_count
 from media_archive.state import StateError
 
 
@@ -43,7 +44,7 @@ class Report:
                 for item in value:
                     summary = f"{item['zakres']} · {item['stan']}"
                     if "pliki" in item:
-                        summary += f" · pliki {item['pliki']}"
+                        summary += f" · pliki {format_count(item['pliki'])}"
                     for note in ("uwaga", "błąd"):
                         if note in item:
                             summary += f" · {item[note]}"

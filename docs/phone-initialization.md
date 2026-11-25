@@ -22,7 +22,7 @@ The command only reads media. It does not create import, placement, or backup su
 
 ## Progress, records and reports
 
-Exit code `3` means some work remains: a prerequisite could not be read, the audit ID is still needed, or later import must fill local gaps. Code `0` means the profile's initialization is complete. Ctrl+C returns `130`. Report pairs contain the phone baseline ID, status, and per-file decisions with evidence references after comparison.
+The first scan reports the start of ADB listing, the number of entries received while listing, and file and byte progress while reading their contents. Listing times out after 30 seconds without new data. Exit code `3` means work remains: a prerequisite could not be read, the audit ID is still needed, or later import must fill local gaps. Code `0` means the profile's initialization is complete. Ctrl+C returns `130`. Report pairs contain the phone baseline ID, status, and per-file decisions with evidence references after comparison.
 
 The workflow uses the existing [initialization state](history.md#initialization). The boundary stores the phone root and device ID. The initial run's source observations form the manifest. The completed `copies` comparison scope stores the local run and audit IDs plus a decision per source occurrence. It retains local occurrence IDs and archive paths, volume IDs and read times. Decisions and any baseline skips commit together. The `baseline` processing scope remains open when local copies are still missing. No new SQLite revision is needed.
 
