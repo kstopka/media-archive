@@ -53,6 +53,7 @@ def _finish(config: Configuration, plan: ImportPlan, result: CameraImportResult)
 
 
 def import_phone(config: Configuration, profile: str, *, reimport: Iterable[str | Path] = (),
+                 full_read: bool = False,
                  announce: Callable[[str], None] = lambda _: None,
                  cancelled: Callable[[], bool] | None = None) -> CameraImportResult:
     """Execute a phone import over ADB into verified staging."""
@@ -61,4 +62,4 @@ def import_phone(config: Configuration, profile: str, *, reimport: Iterable[str 
     except KeyError:
         raise ConfigError("Nie znaleziono skonfigurowanego profilu telefonu.") from None
     return _import(config, profile, "phone", lambda: open_adb_source(config, profile),
-                   reimport, announce, cancelled, finish=_finish)
+                   reimport, announce, cancelled, full_read=full_read, finish=_finish)

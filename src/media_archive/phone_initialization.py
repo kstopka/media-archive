@@ -20,6 +20,7 @@ from media_archive.devices import registered_volume
 from media_archive.full_audit import load_completed_target
 from media_archive.inventory import local_hash_run_id
 from media_archive.sources import hash_source_file, open_adb_source
+from media_archive.state.phone_reads import save_read
 from media_archive.state import DeviceKey, StateError, open_database, transaction, validate_registered_configuration
 from media_archive.state.audit import load_full_audit
 from media_archive.state.history import (
@@ -114,10 +115,12 @@ def _capture(config: Configuration, phone: PhoneProfile, source_id: int, connect
         )
         for entry, digest, observed_at in files:
             content_id = record_content(connection, digest.sha256, digest.size)
-            occurrence = record_occurrence(connection, "source", (scope / entry.path).as_posix(),
+            path = (scope / entry.path).as_posix()
+            occurrence = record_occurrence(connection, "source", path,
                                            content_id=content_id, device_id=device.device_id)
             record_observation(connection, occurrence, run_id, observed_at=observed_at, present=True,
                                size=digest.size, mtime_ns=entry.modified_ns)
+            save_read(connection, source_id, device.device_id, path, entry.fingerprint(), content_id)
 
 
 def _archive_matches(config: Configuration, phone: PhoneProfile, group: ArchiveGroup, audit_id: str,

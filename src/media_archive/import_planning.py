@@ -23,7 +23,7 @@ from media_archive.import_journal import import_operation_key
 from media_archive.operations import check_application_paths
 from media_archive.sources import ReadCancelled, hash_source_file, open_adb_source, open_camera_source
 from media_archive.state import DeviceKey, StateError, open_database, transaction, validate_registered_configuration
-from media_archive.state import history, journal, sort_moves
+from media_archive.state import history, journal, phone_reads, sort_moves
 from media_archive.state.initialization import Initialization, load_initialization
 from media_archive.state.locking import (
     OperationLocks, Resource, canonical_path, installation_lock, lock_resources, require_locks,
@@ -46,6 +46,7 @@ class ImportItem:
     destination: Path | None = None
     source_occurrence_id: int | None = None
     observed_at: datetime | None = None
+    fingerprint: str | None = None
 
 
 @dataclass(frozen=True)
@@ -173,7 +174,8 @@ def unfilled_baseline(connection: Connection, source_id: int, device_id: int,
 
 def _read_manifest(config: Configuration, profile: str, selection: _Selection, mount: Path | None,
                    requested: frozenset[Path], announce: Callable[[str], None],
-                   cancelled: Callable[[], bool] | None) -> tuple[list[ImportItem], list[str]]:
+                   cancelled: Callable[[], bool] | None,
+                   known: dict[str, tuple[str, str]]) -> tuple[list[ImportItem], list[str]]:
     opener = (open_adb_source(config, profile) if selection.kind == "phone"
               else open_camera_source(config, profile, selection.key.alias, mount))
     items = []
@@ -203,6 +205,11 @@ def _read_manifest(config: Configuration, profile: str, selection: _Selection, m
             elif not stat.S_ISREG(entry.mode) or extension not in selection.supported:
                 decision = "unsupported"
             else:
+                fingerprint = entry.fingerprint() if selection.kind == "phone" else None
+                saved = known.get((selection.history_root / entry.path).as_posix())
+                if entry.path not in requested and saved is not None and saved[0] == fingerprint:
+                    items.append(ImportItem(entry.path, entry.size, entry.modified_ns, "copy", saved[1]))
+                    continue
                 try:
                     digest = hash_source_file(source, entry.path, expected=entry, progress=progress, cancelled=cancelled)
                 except ReadCancelled:
@@ -212,7 +219,7 @@ def _read_manifest(config: Configuration, profile: str, selection: _Selection, m
                     problems.append(str(error))
                 else:
                     items.append(ImportItem(entry.path, digest.size, entry.modified_ns, "copy", digest.sha256,
-                                            observed_at=datetime.now(timezone.utc)))
+                                            observed_at=datetime.now(timezone.utc), fingerprint=fingerprint))
                 continue
             items.append(ImportItem(entry.path, entry.size, entry.modified_ns, decision))
     return items, problems
@@ -343,7 +350,7 @@ def _preflight(config: Configuration, plan: ImportPlan, connection: Connection, 
             return replace(plan, items=tuple(items), problems=tuple(dict.fromkeys(problems)),
                            available_bytes=available, required_bytes=required, staging_volume_id=volume_id)
     except StateError as error:
-        return replace(plan, problems=(str(error),))
+        return replace(plan, problems=(f"Wolumin roboczy dla stagingu: {error}",))
     except OSError:
         return replace(plan, problems=("Nie można bezpiecznie sprawdzić katalogów i miejsca stagingu.",))
 
@@ -354,21 +361,25 @@ def _record(connection: Connection, plan: ImportPlan, selection: _Selection, dev
         run_id = history.create_run(connection)
         result = []
         for item in plan.items:
-            if item.sha256 is not None:
+            if item.sha256 is not None and (item.observed_at is not None or item.destination is not None):
                 content_id = history.record_content(connection, item.sha256, item.size)
+                path = (selection.history_root / item.relative_path).as_posix()
                 occurrence = history.record_occurrence(
-                    connection, "source", (selection.history_root / item.relative_path).as_posix(),
+                    connection, "source", path,
                     content_id=content_id, device_id=device_id, volume_id=volume_id,
                 )
-                history.record_observation(connection, occurrence, run_id, observed_at=item.observed_at, present=True,
-                                           size=item.size, mtime_ns=item.modified_ns)
+                if item.observed_at is not None:
+                    history.record_observation(connection, occurrence, run_id, observed_at=item.observed_at, present=True,
+                                               size=item.size, mtime_ns=item.modified_ns)
+                if item.fingerprint is not None:
+                    phone_reads.save_read(connection, plan.source_id, device_id, path, item.fingerprint, content_id)
                 item = replace(item, source_occurrence_id=occurrence)
             result.append(item)
     return replace(plan, items=tuple(result), observation_run_id=run_id)
 
 
 def plan_import(config: Configuration, profile: str, *, card: str | None = None, mount: Path | None = None,
-                reimport: Iterable[str | Path] = (), record: bool = False,
+                reimport: Iterable[str | Path] = (), record: bool = False, full_read: bool = False,
                 locks: OperationLocks | None = None,
                 announce: Callable[[str], None] = lambda _: None,
                 cancelled: Callable[[], bool] | None = None) -> ImportPlan:
@@ -396,11 +407,14 @@ def plan_import(config: Configuration, profile: str, *, card: str | None = None,
                 except StateError as error:
                     return replace(plan, problems=(str(error),))
                 imported = history.load_imported_contents(connection, source_id)
-            items, problems = _read_manifest(config, profile, selection, mount, requested, announce, cancelled)
+                known = (phone_reads.load_reads(connection, source_id, device.device_id)
+                         if selection.kind == "phone" and gaps is None and not full_read else {})
+            items, problems = _read_manifest(config, profile, selection, mount, requested, announce, cancelled, known)
             plan = _decisions(config, replace(plan, items=tuple(items), problems=tuple(problems)),
                               imported, baseline, gaps, baseline_reimports, requested)
             if plan.ready:
                 plan = _preflight(config, plan, connection, baseline_pending=gaps is not None)
-            if record and plan.ready and any(item.sha256 is not None for item in plan.items):
+            if record and plan.ready and any(item.observed_at is not None or item.destination is not None
+                                             for item in plan.items):
                 return _record(connection, plan, selection, device.device_id, device.volume_id)
             return plan

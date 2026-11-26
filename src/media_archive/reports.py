@@ -32,7 +32,7 @@ class Report:
     invocation_id: str = field(default_factory=lambda: uuid4().hex)
     finished_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
-    def render(self, *, summary_only: bool = False) -> str:
+    def render(self, *, summary_only: bool = False, show_all_import: bool = True) -> str:
         lines = [self.message]
         for key, value in self.details.items():
             if key == "Niedokończone operacje":
@@ -57,6 +57,8 @@ class Report:
                         lines.extend(f"- {error['ścieżka']} · {error['błąd']}"
                                      for error in item.get("błędy odczytu", ()))
             elif key in ("Decyzje spisu telefonu", "Manifest importu"):
+                if key == "Manifest importu" and not show_all_import:
+                    value = [item for item in value if item["staging"] is not None]
                 if not summary_only and value:
                     lines.append(key)
                     lines.extend(f"- {item['ścieżka']} · {item['decyzja']}" for item in value)

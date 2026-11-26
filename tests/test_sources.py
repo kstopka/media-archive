@@ -18,6 +18,7 @@ from media_archive.cli import main
 from media_archive.config import ConfigError, load_config
 from media_archive.devices import MountedVolume, _mount_id
 from media_archive.import_recovery import resume_import
+from media_archive.import_planning import plan_import
 from media_archive.phone_import import import_phone
 from media_archive.sources import ReadCancelled, SourceDigest, hash_source_file, open_adb_source, open_camera_source
 from media_archive.state import (
@@ -120,6 +121,45 @@ esac
         for module in ("import_planning", "transfer"):
             self.enterContext(patch(f"media_archive.{module}.verify_volume",
                                     side_effect=lambda *_args, **_kwargs: nullcontext(volume)))
+
+    def test_incremental_phone_preview_hashes_only_new_or_changed_files(self) -> None:
+        self._fake_adb()
+        self._import_staging()
+        old = self.android / "z-known.jpg"
+        old.write_bytes(b"old")
+        self._import_baseline("baseline_skip_missing", {old.name: b"old"})
+        self.assertTrue(plan_import(self.config, "main", record=True).ready)
+        new = self.android / "a-new.jpg"
+        new.write_bytes(b"new")
+        database = self.config.app.database_file.read_bytes()
+
+        output = StringIO()
+        with (patch("media_archive.import_planning.hash_source_file", wraps=hash_source_file) as hashing,
+              redirect_stdout(output), redirect_stderr(StringIO())):
+            self.assertEqual(main(["--config", str(self.settings), "import", "--source", "main", "--dry-run"]), 0)
+            self.assertEqual([call.args[1] for call in hashing.call_args_list], [Path(new.name)])
+        self.assertEqual(self.config.app.database_file.read_bytes(), database)
+        text = output.getvalue()
+        self.assertIn("Pominięte pliki · 1", text)
+        self.assertIn("Pliki znane z historii · 0", text)
+        self.assertIn("Nowe pliki · 1", text)
+        self.assertIn("a-new.jpg · do skopiowania", text)
+        self.assertNotIn("z-known.jpg", text)
+        full_manifest = StringIO()
+        with redirect_stdout(full_manifest), redirect_stderr(StringIO()):
+            self.assertEqual(main(["--config", str(self.settings), "import", "--source", "main", "--dry-run",
+                                   "--show-all"]), 0)
+        self.assertIn("z-known.jpg · pominięcie bazowe", full_manifest.getvalue())
+
+        with patch("media_archive.import_planning.hash_source_file", wraps=hash_source_file) as hashing:
+            self.assertTrue(plan_import(self.config, "main", full_read=True).ready)
+            self.assertEqual({call.args[1] for call in hashing.call_args_list}, {Path(new.name), Path(old.name)})
+        replacement = self.root / "replacement"
+        replacement.write_bytes(b"xyz")
+        os.utime(replacement, ns=(old.stat().st_atime_ns, old.stat().st_mtime_ns))
+        replacement.replace(old)
+        changed = plan_import(self.config, "main")
+        self.assertEqual({item.relative_path for item in changed.transfers}, {Path(new.name), Path(old.name)})
 
     def test_phone_import_fills_only_baseline_until_complete_then_imports_new_media(self) -> None:
         self._fake_adb()

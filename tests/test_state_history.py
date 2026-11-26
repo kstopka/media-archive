@@ -69,7 +69,7 @@ class StateHistoryTests(unittest.TestCase):
             register_configuration(config)
         keys = load_registered_identities(self.path)
         devices = load_registered_devices(self.path)
-        self.assertEqual(migrate_database(self.path), "0013")
+        self.assertEqual(migrate_database(self.path), "0014")
         self.assertEqual(load_registered_identities(self.path), keys)
         self.assertEqual(load_registered_devices(self.path), devices)
         validate_registered_configuration(config)

@@ -70,6 +70,9 @@ class SourceEntry:
     device: int
     inode: int
 
+    def fingerprint(self) -> str:
+        return f"{self.mode}:{self.size}:{self.modified_ns}:{self.changed_ns}:{self.device}:{self.inode}"
+
     @classmethod
     def from_stat(cls, path: Path, info: os.stat_result) -> "SourceEntry":
         return cls(path, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_dev, info.st_ino)

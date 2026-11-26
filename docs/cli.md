@@ -19,9 +19,9 @@ Use `media-archive` or `python -m media_archive`. Put `--config FILE` before the
 | `audit --resume AUDIT_ID` | Resume a saved full audit on the same registered volumes. |
 | `inventory [--hash-local]` | Build or resume the [initial inventory](inventory.md); optionally read local SHA-256. |
 | `init-phone PROFILE [--audit AUDIT_ID]` | Capture a [phone baseline](phone-initialization.md) or compare it using a completed full audit. |
-| `import --source PROFILE --dry-run [--card CARD --mount DIRECTORY] [--reimport RELATIVE_PATH] [--report]` | Show the [import plan](import-planning.md), decisions and staging preflight without copying. |
+| `import --source PROFILE --dry-run [--card CARD --mount DIRECTORY] [--reimport RELATIVE_PATH] [--show-all] [--report]` | Show the [import plan](import-planning.md), copy candidates and staging preflight. `--show-all` displays every decision in the terminal. |
 | `import --source PROFILE --card CARD --mount DIRECTORY [--reimport RELATIVE_PATH]` | Execute [camera card import](camera-import.md) with a text and JSON report. |
-| `import --source PROFILE [--reimport RELATIVE_PATH]` | Execute [phone import through ADB](phone-import.md) with a text and JSON report. |
+| `import --source PROFILE [--reimport RELATIVE_PATH] [--full-read]` | Execute [phone import through ADB](phone-import.md). Add `--full-read` to recalculate SHA-256 for every supported file, including in a dry run. |
 | `pending` | List unfinished journal operations and their latest attempt states. A listed operation may still have a live owner. |
 | `resume ID --dry-run` | Show the next step for an unfinished operation using its numeric operation ID. |
 | `resume ID [--card CARD --mount DIRECTORY]` | Resume a saved [IMPORT](import-recovery.md) or [SORT](sort.md) operation, including cleanup. The card arguments apply only to camera import. |

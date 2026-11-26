@@ -97,6 +97,10 @@ _IMPORT_DECISIONS = {
 def _import_details(plan: ImportPlan) -> dict[str, object]:
     details: dict[str, object] = {
         "Profil źródła": plan.profile, "Pliki do importu": len(plan.transfers),
+        "Pominięte pliki": sum(item.decision in ("baseline_skip", "duplicate", "ignored", "unsupported")
+                             for item in plan.items),
+        "Pliki znane z historii": sum(item.decision in ("existing_baseline", "already_imported") for item in plan.items),
+        "Nowe pliki": sum(item.decision == "copy" for item in plan.items),
         "Wymagane bajty na stagingu": plan.required_bytes, "Rezerwa stagingu w bajtach": plan.reserve_bytes,
         "Pominięte formaty": sum(item.decision == "ignored" for item in plan.items),
         "Nieobsługiwane wpisy": sum(item.decision == "unsupported" for item in plan.items),
@@ -195,6 +199,9 @@ def _parser() -> argparse.ArgumentParser:
     import_parser.add_argument("--mount", type=Path, metavar="KATALOG")
     import_parser.add_argument("--reimport", action="append", default=[], metavar="ŚCIEŻKA",
                                help="zaplanuj ponowny import wskazanego pliku względnie do katalogu źródła")
+    import_parser.add_argument("--full-read", action="store_true",
+                               help="oblicz SHA-256 wszystkich obsługiwanych plików telefonu")
+    import_parser.add_argument("--show-all", action="store_true", help="pokaż cały manifest importu w terminalu")
     sort = commands.add_parser("sort", help="uporządkuj zweryfikowane importy")
     sort_date = commands.add_parser("sort-date", help="zapisz ręczną datę importu oczekującego na SORT")
     sort_date.add_argument("import_id", type=_operation_id, metavar="ID_IMPORTU")
@@ -254,6 +261,8 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             parser.error("--copy-if-elsewhere wymaga BACKUP --yes.")
     if args.command in ("import", "resume") and (args.card is None) != (args.mount is None):
         parser.error("Import z karty wymaga jednocześnie --card i --mount.")
+    if args.command == "import" and args.full_read and args.card is not None:
+        parser.error("--full-read dotyczy telefonu. Import z karty zawsze wykonuje pełny odczyt.")
     if args.command == "audit":
         if args.resume is not None:
             if args.group is not None or args.targets is not None or args.mode == "quick":
@@ -340,7 +349,7 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         elif args.command == "import":
             if dry_run:
                 plan = plan_import(config, args.source, card=args.card, mount=args.mount, reimport=args.reimport,
-                                   announce=announce)
+                                   full_read=args.full_read, announce=announce)
                 code = 0 if plan.ready else 3
                 message = "Plan importu gotowy." if plan.ready else "Plan importu jest zablokowany."
                 details = _import_details(plan)
@@ -349,7 +358,8 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                     outcome = import_camera(config, args.source, card=args.card, mount=args.mount,
                                             reimport=args.reimport, announce=announce)
                 else:
-                    outcome = import_phone(config, args.source, reimport=args.reimport, announce=announce)
+                    outcome = import_phone(config, args.source, reimport=args.reimport, full_read=args.full_read,
+                                           announce=announce)
                 code, message = outcome.code, outcome.message
                 details = _import_details(outcome.plan)
                 details.update({
@@ -432,8 +442,9 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     except StateError as error:
         report = Report(args.command, 1, f"Błąd wykonania: {error}", dry_run)
 
-    print(report.render(summary_only=args.command in ("audit", "inventory", "init-phone", "import") and save_report), end="",
-          file=sys.stderr if report.code else sys.stdout)
+    print(report.render(summary_only=args.command in ("audit", "inventory", "init-phone") and save_report,
+                        show_all_import=getattr(args, "show_all", False)),
+          end="", file=sys.stderr if report.code else sys.stdout)
     if save_report:
         try:
             destination = write_report(config.app.reports_dir, report, config.app.report_keep_runs)

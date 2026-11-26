@@ -74,6 +74,7 @@ def _import(config: Configuration, profile: str, kind: Literal["camera", "phone"
             open_source: Callable[[], AbstractContextManager[LocalSource | AdbSource]],
             reimport: Iterable[str | Path], announce: Callable[[str], None],
             cancelled: Callable[[], bool] | None, *, card: str | None = None, mount: Path | None = None,
+            full_read: bool = False,
             finish: Callable[[Configuration, ImportPlan, CameraImportResult], CameraImportResult] | None = None,
             ) -> CameraImportResult:
     database = config.app.database_file
@@ -84,7 +85,7 @@ def _import(config: Configuration, profile: str, kind: Literal["camera", "phone"
         staging = Resource("collection", str(canonical_path(config.local.staging_root)))
         with lock_resources(database, [resource, staging]) as locks:
             plan = plan_import(config, profile, card=card, mount=mount, reimport=reimport, record=True,
-                               locks=locks, announce=announce, cancelled=cancelled)
+                               full_read=full_read, locks=locks, announce=announce, cancelled=cancelled)
             if not plan.ready:
                 return CameraImportResult(3, "Import jest zablokowany przez plan.", plan)
             if not plan.transfers:
