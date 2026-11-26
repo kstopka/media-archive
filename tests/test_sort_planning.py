@@ -26,7 +26,9 @@ from media_archive.metadata import MetadataToolError, read_metadata
 from media_archive.import_restore import reconcile_imports
 from media_archive.sort_execution import execute_sort, resume_sort
 from media_archive.sort_planning import plan_sort, set_sort_date
+from media_archive.sources import SourceEntry
 from media_archive.state import DeviceKey, StateError, history, open_database, sort_moves, transaction
+from media_archive.state.backup_reads import load_saved_reads
 from media_archive.state.registry import initialize_database
 from media_archive.state.reconciliation import load_reconciliation
 from media_archive.state.snapshots import create_snapshot, restore_snapshot
@@ -91,6 +93,16 @@ class SortPlanningTests(unittest.TestCase):
             code = main(["--config", str(self.settings), *args])
         self.assertEqual(code, expected, output.getvalue())
         return output.getvalue()
+
+    def _backup_reads(self):
+        volume_id = registered_volume(self.config, DeviceKey("local", self.volume.alias)).volume_id
+        with open_database(self.database) as connection:
+            return volume_id, load_saved_reads(connection, {volume_id})
+
+    def _assert_backup_read(self, path: Path, content: bytes) -> None:
+        volume_id, reads = self._backup_reads()
+        attributes = SourceEntry.from_stat(path, path.stat()).volume_fingerprint()
+        self.assertEqual(reads[volume_id, path, attributes], sha256(content).hexdigest())
 
     @unittest.skipUnless(shutil.which("exiftool"), "requires ExifTool")
     def test_preview_uses_recorded_photo_day_and_local_video_day_without_writes(self) -> None:
@@ -213,6 +225,7 @@ class SortPlanningTests(unittest.TestCase):
         self.assertEqual(undated.read_bytes(), _photo())
         self.assertEqual(undated.stat().st_ino, inode)
         self.assertFalse(staging.exists())
+        self.assertEqual(self._backup_reads()[1], {})
         repeated, = execute_sort(self.config)
         self.assertIsNone(repeated.item.operation_id)
         set_sort_date(self.config, import_id, date(2025, 2, 1))
@@ -220,6 +233,8 @@ class SortPlanningTests(unittest.TestCase):
         self.assertEqual(final.status, "placed")
         self.assertFalse(undated.exists())
         self.assertEqual(final.item.target.read_bytes(), _photo())
+        self.assertEqual(final.item.target.stat().st_ino, inode)
+        self._assert_backup_read(final.item.target, _photo())
         self.assertEqual(execute_sort(self.config), ())
         new_import, staging = self._import(Path("/camera/photo.png"), _photo())
         set_sort_date(self.config, new_import, date(2025, 2, 1))
@@ -228,6 +243,7 @@ class SortPlanningTests(unittest.TestCase):
         self.assertEqual(repeated.status, "placed")
         self.assertEqual(repeated.item.target, final.item.target)
         self.assertFalse(staging.exists())
+        self._assert_backup_read(final.item.target, _photo())
         with open_database(self.database) as connection:
             self.assertIsNotNone(history.load_placement(connection, import_id))
             self.assertIsNotNone(history.load_placement(connection, new_import))
@@ -252,6 +268,7 @@ class SortPlanningTests(unittest.TestCase):
         self.assertEqual(occupied.read_bytes(), b"first existing variant")
         self.assertEqual(short.read_bytes(), b"second existing variant")
         self.assertFalse(staging.exists())
+        self._assert_backup_read(written, sample)
         with open_database(self.database) as connection:
             self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM sort_conflicts").scalar_one(), 1)
             self.assertEqual(connection.exec_driver_sql("SELECT count(*) FROM sort_conflict_members").scalar_one(), 3)
@@ -291,7 +308,35 @@ class SortPlanningTests(unittest.TestCase):
         self.assertFalse(staging.exists())
         self.assertEqual(target.read_bytes(), sample)
         self.assertEqual(target.stat().st_nlink, 1)
+        self._assert_backup_read(target, sample)
         self.assertEqual(list(target.parent.glob(".media-archive-transfer-*")), [])
+
+    @unittest.skipUnless(shutil.which("exiftool"), "requires ExifTool")
+    def test_sort_does_not_record_a_replacement_after_unlinking_staging(self) -> None:
+        sample = _movie(datetime(2025, 2, 5, tzinfo=timezone.utc))
+        _, staging = self._import(Path("/camera/movie.mp4"), sample)
+        planned, = plan_sort(self.config)
+        target = planned.target
+        saved = self.root / "published"
+        remove = Destination.remove_verified
+
+        def replace_after_cleanup(destination, *args, **kwargs):
+            remove(destination, *args, **kwargs)
+            target.rename(saved)
+            target.write_bytes(b"unrelated")
+
+        with patch.object(Destination, "remove_verified", replace_after_cleanup):
+            result, = execute_sort(self.config)
+        self.assertEqual(result.status, "blocked")
+        self.assertFalse(staging.exists())
+        self.assertEqual(target.read_bytes(), b"unrelated")
+        self.assertEqual(self._backup_reads()[1], {})
+        with open_database(self.database) as connection:
+            self.assertFalse(sort_moves.find_move(connection, result.item.operation_id).cleanup_done)
+
+        saved.replace(target)
+        self.assertEqual(resume_sort(self.config, result.item.operation_id).status, "placed")
+        self._assert_backup_read(target, sample)
 
     @unittest.skipUnless(shutil.which("exiftool"), "requires ExifTool")
     def test_restore_reconciles_a_sort_published_after_the_snapshot(self) -> None:

@@ -19,6 +19,7 @@ from media_archive.sort_conflicts import choose_name, require_destination_name
 from media_archive.sort_planning import SortItem, plan_sort
 from media_archive.sources import LocalSource, ReadCancelled, SourceDigest
 from media_archive.state import DeviceKey, StateError, history, journal, open_database, sort_moves, transaction
+from media_archive.state.backup_reads import save_reads
 from media_archive.state.locking import (
     OperationLocks, Resource, canonical_path, collection_resource, installation_lock, lock_resources,
 )
@@ -165,12 +166,18 @@ def _cleanup(config: Configuration, operation: SortOperation, resources: frozens
     database = config.app.database_file
     with open_database(database) as connection:
         key, relative = _destination(connection, config, operation.target, resources)
+    entry = None
     with verify_volume(config, key) as mounted:
-        with Destination(mounted, relative).keep_verified(operation.digest) as confirm:
+        with Destination(mounted, relative).keep_verified(operation.digest) as (confirm, final_entry):
             source_key, _, path = _origin_location(config, operation)
             with verify_volume(config, source_key, writable=True) as source:
                 Destination(source, path.relative_to(source.root)).remove_verified(operation.digest, confirm)
+            if operation.target.kind == "local":
+                entry = final_entry()
     with open_database(database, writable=True) as connection, transaction(connection):
+        if entry is not None:
+            save_reads(connection, [(operation.target.volume_id, operation.target.path,
+                                     entry.volume_fingerprint(), operation.target.content_id)])
         sort_moves.finish_cleanup(connection, operation.operation.id)
 
 

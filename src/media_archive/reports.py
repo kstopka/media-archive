@@ -45,11 +45,14 @@ class Report:
                     summary = f"{item['zakres']} · {item['stan']}"
                     if "pliki" in item:
                         summary += f" · pliki {format_count(item['pliki'])}"
+                    if "użyte skróty" in item:
+                        summary += (f" · użyte skróty {format_count(item['użyte skróty'])}"
+                                    f" · pełne odczyty {format_count(item['pełne odczyty'])}")
                     for note in ("uwaga", "błąd"):
                         if note in item:
                             summary += f" · {item[note]}"
                     if "błędy odczytu" in item:
-                        summary += f" · błędy odczytu {len(item['błędy odczytu'])}"
+                        summary += f" · błędy odczytu {format_count(len(item['błędy odczytu']))}"
                     lines.append(summary)
                     if not summary_only:
                         if "ID obserwacji" in item:

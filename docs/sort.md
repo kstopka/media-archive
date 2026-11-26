@@ -15,6 +15,8 @@ SORT locks the working directories and the relevant collection roots. It recheck
 
 On the same mount, SORT can publish a hard link directly under the final name after verifying the working file. Across mounts, when hard links are unavailable or when the working inode already has other names, SORT uses rsync and checks the remaining space reserve. The copy path requires a non-overwriting rename for publication. SORT commits the result before removing its previous working copy and rechecks the published copy before unlinking. It retains the working copy if the destination is uncertain. Embedded metadata and file contents are preserved.
 
+After cleanup, SORT stores the final collection path and file attributes with the verified SHA-256 for [quick BACKUP](backup-planning.md#quick-preview). Removing a staging hard link changes the destination inode's link count and can change its change time. SORT verifies that inode again before recording its final attributes. The record and cleanup completion commit together. Files waiting for a date get this record after placement in a collection. For files placed before this behavior was available, use [inventory refresh](inventory.md#refresh-local-backup-evidence).
+
 ## Recovery
 
 `pending` lists unfinished moves, including placements with cleanup still outstanding. Use `resume ID --dry-run` to inspect the operation and `resume ID` to retry it. SORT also resumes pending moves on the next run. It checks the stored destination for equivalent names and verifies a possibly published file before copying again. A conflicting file that appeared after planning is kept in place, and the operation reports that it needs attention. Finish a pending move before changing its manual date.

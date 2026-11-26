@@ -1,7 +1,7 @@
-"""The initial read-only inventory of local collections and archives."""
+"""Inventory local collections and archives without changing media."""
 
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -10,14 +10,20 @@ from time import monotonic
 from typing import Literal
 from uuid import NAMESPACE_URL, uuid5
 
+from sqlalchemy.engine import Connection
+
 from media_archive._progress import format_count, format_size
 from media_archive.audit import _Scan, _scan
 from media_archive.config import Configuration
 from media_archive.devices import VolumeUnavailable, registered_volume
-from media_archive.sources import SourceEntry, hash_source_file, open_local_source
-from media_archive.state import DeviceKey, StateError, open_database, validate_registered_configuration
+from media_archive.sources import LocalSource, SourceDigest, SourceEntry, hash_source_file, open_local_source
+from media_archive.state import DeviceKey, StateError, history, open_database, transaction, validate_registered_configuration
+from media_archive.state.backup_reads import load_saved_reads, save_reads
 from media_archive.state.inventory import InventoryFile, save_scope, scope_file_count
 from media_archive.state.locking import Resource, collection_resource, lock_resources
+
+
+_REFRESH_BATCH_SIZE = 128
 
 
 @dataclass(frozen=True)
@@ -77,9 +83,7 @@ def local_hash_run_id(config: Configuration, collection_id: str) -> str | None:
     return None
 
 
-def _read_scope(config: Configuration, scope: _Scope, hash_files: bool, announce: Callable[[str], None],
-                errors: list[dict[str, str]]) -> list[InventoryFile]:
-    files = []
+def _scan_scope(source: LocalSource, scope: _Scope, announce: Callable[[str], None]) -> _Scan:
     directories = scanned_files = 0
     last_message = monotonic()
 
@@ -93,15 +97,21 @@ def _read_scope(config: Configuration, scope: _Scope, hash_files: bool, announce
                      f"pliki {format_count(scanned_files)}")
             last_message = now
 
+    scan = _Scan()
+    _scan(source, scan, on_directory=on_directory)
+    for _, root in scope.collections:
+        path = root.relative_to(scope.root)
+        if path not in scan.observed_at and scan.covers(path):
+            scan.errors[path] = "Nie odczytano katalogu skonfigurowanego zbioru."
+    return scan
+
+
+def _read_scope(config: Configuration, scope: _Scope, hash_files: bool, announce: Callable[[str], None],
+                errors: list[dict[str, str]]) -> list[InventoryFile]:
+    files = []
     with open_local_source(config, scope.key, scope=scope.root) as source:
-        scan = _Scan()
-        _scan(source, scan, on_directory=on_directory)
-        for _, root in scope.collections:
-            path = root.relative_to(scope.root)
-            if path not in scan.observed_at and scan.covers(path):
-                scan.errors[path] = "Nie odczytano katalogu skonfigurowanego zbioru."
-        for path, error in sorted(scan.errors.items()):
-            errors.append({"ścieżka": path.as_posix(), "błąd": error})
+        scan = _scan_scope(source, scope, announce)
+        errors.extend({"ścieżka": path.as_posix(), "błąd": error} for path, error in sorted(scan.errors.items()))
         if errors:
             return files
         regular = [entry for entry in scan.entries.values() if stat.S_ISREG(entry.mode)]
@@ -189,3 +199,110 @@ def inventory(config: Configuration, *, hash_local: bool, announce: Callable[[st
         return InventoryResult(3, "Spis niepełny. Sprawdź raport, podłącz nośniki i ponów polecenie.",
                                {"Zakresy spisu": results})
     return InventoryResult(0, "Pierwszy spis istniejących danych ukończony.", {"Zakresy spisu": results})
+
+
+def _save_refresh_batch(connection: Connection, volume_id: int,
+                        batch: list[tuple[str, str, SourceDigest]]) -> None:
+    with transaction(connection):
+        save_reads(connection, (
+            (volume_id, path, attributes, history.record_content(connection, digest.sha256, digest.size))
+            for path, attributes, digest in batch
+        ))
+    batch.clear()
+
+
+@dataclass
+class _RefreshProgress:
+    reused: int = 0
+    hashed: int = 0
+    errors: list[dict[str, str]] = field(default_factory=list)
+
+
+def _refresh_scope(config: Configuration, connection: Connection, scope: _Scope, volume_id: int,
+                   progress: _RefreshProgress, announce: Callable[[str], None]) -> None:
+    with connection.begin():
+        known = load_saved_reads(connection, {volume_id})
+    with open_local_source(config, scope.key, scope=scope.root) as source:
+        scan = _scan_scope(source, scope, announce)
+        progress.errors.extend({"ścieżka": path.as_posix(), "błąd": error}
+                               for path, error in sorted(scan.errors.items()))
+        pending: list[tuple[SourceEntry, Path, str]] = []
+        for entry in scan.entries.values():
+            if not stat.S_ISREG(entry.mode):
+                continue
+            path = scope.history_root / entry.path
+            attributes = entry.volume_fingerprint()
+            if (volume_id, path, attributes) in known:
+                progress.reused += 1
+            else:
+                pending.append((entry, path, attributes))
+        if not pending:
+            return
+        total = sum(entry.size for entry, _, _ in pending)
+        announce(f"{scope.label} · SHA-256: {format_count(len(pending))} plików, {format_size(total)}.")
+        batch: list[tuple[str, str, SourceDigest]] = []
+        completed_bytes = 0
+        last_message = monotonic()
+
+        def announce_read(read: int, _size: int) -> None:
+            nonlocal last_message
+            now = monotonic()
+            if now - last_message >= 1:
+                announce(f"{scope.label} · pełne odczyty {format_count(progress.hashed)}/{format_count(len(pending))}"
+                         f" · odczytano {format_size(completed_bytes + read)} / {format_size(total)}")
+                last_message = now
+
+        for entry, path, attributes in pending:
+            try:
+                digest = hash_source_file(source, entry.path, expected=entry, progress=announce_read)
+            except (StateError, OSError) as error:
+                message = str(error) if isinstance(error, StateError) else "Nie można odczytać lokalnego pliku."
+                progress.errors.append({"ścieżka": entry.path.as_posix(), "błąd": message})
+                continue
+            progress.hashed += 1
+            completed_bytes += digest.size
+            batch.append((path.as_posix(), attributes, digest))
+            if len(batch) == _REFRESH_BATCH_SIZE:
+                _save_refresh_batch(connection, volume_id, batch)
+        if batch:
+            _save_refresh_batch(connection, volume_id, batch)
+
+
+def refresh_local_inventory(config: Configuration, *, announce: Callable[[str], None]) -> InventoryResult:
+    """Refresh local BACKUP evidence without changing the initial inventory."""
+    database = config.app.database_file
+    scopes = tuple(scope for scope in _scopes(config) if scope.kind == "local")
+    resources = [collection_resource(config, scope.collections[-1][0]) for scope in scopes]
+    results: list[dict[str, object]] = [{"zakres": scope.label, "stan": "oczekuje"} for scope in scopes]
+    code = 0
+    with lock_resources(database, resources):
+        validate_registered_configuration(config)
+        with open_database(database, writable=True) as connection:
+            for scope, result in zip(scopes, results, strict=True):
+                progress = _RefreshProgress()
+                try:
+                    volume_id = registered_volume(config, scope.key).volume_id
+                    if volume_id is None:
+                        raise StateError("Brak zarejestrowanego woluminu.")
+                    announce(f"Odświeżenie · {scope.label}")
+                    _refresh_scope(config, connection, scope, volume_id, progress, announce)
+                    result["stan"] = "niepełny" if progress.errors else "ukończono"
+                except (StateError, OSError) as error:
+                    result["stan"] = "niepełny"
+                    result["błąd"] = str(error) if isinstance(error, StateError) else "Nie można odświeżyć zbioru."
+                except KeyboardInterrupt:
+                    result["stan"] = "przerwano"
+                    code = 130
+                finally:
+                    result.update({"użyte skróty": progress.reused, "pełne odczyty": progress.hashed,
+                                   "błędy odczytu": progress.errors})
+                if code == 130:
+                    break
+                if result["stan"] == "niepełny":
+                    code = 3
+    messages = {
+        0: "Odświeżono lokalne dane BACKUP.",
+        3: "Odświeżenie lokalnych danych BACKUP jest niepełne. Sprawdź raport.",
+        130: "Przerwano odświeżenie. Zatwierdzone odczyty są zapisane.",
+    }
+    return InventoryResult(code, messages[code], {"Zakresy spisu": results})

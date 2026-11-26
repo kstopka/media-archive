@@ -18,6 +18,7 @@ Use `media-archive` or `python -m media_archive`. Put `--config FILE` before the
 | `audit --mode full --group GROUP --targets FIRST SECOND` | Compare SHA-256 and save progress in SQLite. See [full audit](audit.md#full-sha-256-audit). |
 | `audit --resume AUDIT_ID` | Resume a saved full audit on the same registered volumes. |
 | `inventory [--hash-local]` | Build or resume the [initial inventory](inventory.md); optionally read local SHA-256. |
+| `inventory --refresh-local` | Update [local BACKUP evidence](inventory.md#refresh-local-backup-evidence), reading complete contents only for files without matching saved evidence. |
 | `init-phone PROFILE [--audit AUDIT_ID]` | Capture a [phone baseline](phone-initialization.md) or compare it using a completed full audit. |
 | `import --source PROFILE --dry-run [--card CARD --mount DIRECTORY] [--reimport RELATIVE_PATH] [--show-all] [--report]` | Show the [import plan](import-planning.md), copy candidates and staging preflight. `--show-all` displays every decision in the terminal. |
 | `import --source PROFILE --card CARD --mount DIRECTORY [--reimport RELATIVE_PATH]` | Execute [camera card import](camera-import.md) with a text and JSON report. |

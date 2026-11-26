@@ -44,6 +44,7 @@ def _signature(status: os.stat_result) -> tuple[int, ...]:
 def _read_digest(fd: int) -> tuple[SourceDigest, os.stat_result]:
     before = os.fstat(fd)
     with os.fdopen(os.dup(fd), "rb") as stream:
+        stream.seek(0)
         digest = file_digest(stream, "sha256").hexdigest()
     if _signature(os.fstat(fd)) != _signature(before):
         raise StateError("Kopia zmieniła się podczas niezależnej weryfikacji.")
@@ -234,8 +235,10 @@ class Destination:
             return proof
 
     @contextmanager
-    def keep_verified(self, expected: SourceDigest) -> Generator[Callable[[], None], None, None]:
-        """Pin the verified published file and let cleanup recheck it before unlinking."""
+    def keep_verified(self, expected: SourceDigest) -> Generator[
+        tuple[Callable[[], None], Callable[[], SourceEntry]], None, None
+    ]:
+        """Keep the published file open through cleanup and final attribute capture."""
         try:
             with self.parent() as parent, _open_regular(parent, self.path.name, self.volume.mount_id) as fd:
                 digest, status = _read_digest(fd)
@@ -253,8 +256,27 @@ class Destination:
                     if _signature(current) != _signature(status):
                         raise StateError("Gotowa kopia SORT zmieniła się przed usunięciem kopii roboczej.")
 
+                def final_entry() -> SourceEntry:
+                    current = os.fstat(fd)
+                    if (_signature(current) != _signature(status) or current.st_nlink != status.st_nlink):
+                        # Unlinking the staging name of this inode changes its link count and ctime.
+                        if (_signature(current)[:-1] != _signature(status)[:-1]
+                                or current.st_nlink != status.st_nlink - 1):
+                            raise StateError("Gotowa kopia SORT zmieniła się podczas sprzątania.")
+                        digest, current = _read_digest(fd)
+                        if digest != expected:
+                            raise StateError("Gotowa kopia SORT nie zgadza się z historią po sprzątaniu.")
+                    try:
+                        self.check_parent(parent)
+                        named = os.stat(self.path.name, dir_fd=parent, follow_symlinks=False)
+                    except FileNotFoundError:
+                        raise StateError("Gotowa kopia SORT zniknęła po sprzątaniu.") from None
+                    if _signature(named) != _signature(current) or named.st_nlink != current.st_nlink:
+                        raise StateError("Gotowa kopia SORT zmieniła się po sprzątaniu.")
+                    return SourceEntry.from_stat(self.path, current)
+
                 confirm()
-                yield confirm
+                yield confirm, final_entry
         except FileNotFoundError:
             raise StateError("Brak gotowej kopii SORT. Pozostawiono kopię roboczą.") from None
 

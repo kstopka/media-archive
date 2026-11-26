@@ -19,7 +19,7 @@ from media_archive.full_audit import full_audit
 from media_archive.import_planning import ImportPlan, plan_import
 from media_archive.import_recovery import resume_import
 from media_archive.import_restore import reconcile_imports
-from media_archive.inventory import inventory
+from media_archive.inventory import inventory, refresh_local_inventory
 from media_archive.phone_initialization import initialize_phone
 from media_archive.phone_import import import_phone
 from media_archive.reports import Report, write_report
@@ -189,7 +189,10 @@ def _parser() -> argparse.ArgumentParser:
     audit.add_argument("--mode", choices=("quick", "full"))
     audit.add_argument("--resume", metavar="ID_AUDYTU", help="wznów pełny audyt z zapisanej bazy")
     inventory_parser = commands.add_parser("inventory", help="wykonaj lub wznów pierwszy spis zbiorów i archiwów")
-    inventory_parser.add_argument("--hash-local", action="store_true", help="odczytaj także SHA-256 lokalnych plików")
+    inventory_mode = inventory_parser.add_mutually_exclusive_group()
+    inventory_mode.add_argument("--hash-local", action="store_true", help="odczytaj także SHA-256 lokalnych plików")
+    inventory_mode.add_argument("--refresh-local", action="store_true",
+                                help="odśwież dane BACKUP tylko dla zbiorów lokalnych")
     phone_init = commands.add_parser("init-phone", help="zapisz lub porównaj pierwszy spis telefonu")
     phone_init.add_argument("profile", metavar="PROFIL")
     phone_init.add_argument("--audit", metavar="ID_AUDYTU", help="użyj zapisanego pełnego audytu właściwej pary")
@@ -343,8 +346,10 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                 outcome = quick_audit(config, args.group, *args.targets, dry_run=dry_run)
             code, message, details = outcome.code, outcome.message, outcome.details
         elif args.command == "inventory":
-            outcome = inventory(config, hash_local=args.hash_local,
-                                announce=lambda message: print(message, file=sys.stderr, flush=True))
+            if args.refresh_local:
+                outcome = refresh_local_inventory(config, announce=announce)
+            else:
+                outcome = inventory(config, hash_local=args.hash_local, announce=announce)
             code, message, details = outcome.code, outcome.message, outcome.details
         elif args.command == "init-phone":
             outcome = initialize_phone(config, args.profile, audit_id=args.audit,

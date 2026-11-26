@@ -13,6 +13,16 @@ The default is a metadata scan: it records the presence, path, size and modifica
 
 The terminal reports the number of scanned directories and regular files during metadata traversal, then announces when a scope is being saved. Hashing progress shows completed files and bytes read in decimal KB, MB, GB or TB. Spaces group thousands in file counts. JSON reports retain exact numerical values.
 
+## Refresh local BACKUP evidence
+
+```bash
+media-archive inventory --refresh-local
+```
+
+Use this mode on revision `0015` or later to fill missing BACKUP evidence for local collections, for example after migrating a database whose original hashed inventory predates this revision. It needs only the configured local volumes. It preserves the original inventory and phone initialization state. This mode cannot be combined with `--hash-local`.
+
+The refresh reuses a saved SHA-256 when the registered volume, path and complete file attributes still match. New, changed and previously unrecorded files need a full read. Successful reads commit in batches of 128 and at the end of each collection. Repeat the command after an interruption to use already committed reads. The report lists reused digests, full reads and errors by collection. Exit code `3` indicates a partial refresh, and `130` indicates an interruption.
+
 ## Resume and errors
 
 Connect whichever disks are available and run the same command again after attaching the others. Every completed scope, including an empty directory, has a stable observation run in SQLite. Its observations and completion are committed together and survive report rotation. An unmounted volume, missing scope root or scan error leaves the scope pending. Every configured child collection must also be read as a directory. A child that is missing, is a symbolic link, or lies behind one leaves the enclosing scope pending. An unfinished scope is read again; completed scopes are reused as historical evidence even when their disks are offline. The optional local hash pass has scope rather than per-file checkpoints and retries unfinished collections in full. Changing the registered volume episode or applicable local paths and collection ownership changes the scope identity. Moving the mount point of the same archive episode does not.

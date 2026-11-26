@@ -1,6 +1,7 @@
 """Exercise initial inventory and recovery using synthetic local and archive volumes."""
 
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
+from hashlib import sha256
 from io import StringIO
 from itertools import count
 import json
@@ -13,10 +14,11 @@ from unittest.mock import patch
 from media_archive._progress import format_count, format_size
 from media_archive.cli import main
 from media_archive.config import load_config
-from media_archive.devices import MountedVolume, VolumeUnavailable, _mount_id
+from media_archive.devices import MountedVolume, VolumeUnavailable, _mount_id, registered_volume
 from media_archive.import_planning import plan_import
-from media_archive.sources import LocalSource
+from media_archive.sources import LocalSource, SourceEntry, hash_source_file
 from media_archive.state import DeviceKey, StateError, open_database
+from media_archive.state.backup_reads import load_saved_reads
 from media_archive.state.history import load_source_id, record_observation
 from media_archive.state.initialization import load_baseline_skips, load_initialization
 from media_archive.state.registry import initialize_database
@@ -95,6 +97,66 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(format_size(125_577_467), "125,58 MB")
         self.assertEqual(format_size(44_677_424_429), "44,68 GB")
         self.assertEqual(format_size(1_528_784_980_409), "1,53 TB")
+
+    def test_refresh_local_fills_old_inventory_and_reuses_current_reads(self) -> None:
+        path = self.config.collection("photos_main").local_root / "existing.jpg"
+        path.write_bytes(b"old")
+        with patch("media_archive.state.inventory.save_reads"):
+            original = self._cli("inventory", "--hash-local")["Zakresy spisu"]
+
+        self.offline.update(self.archives)
+        with patch("media_archive.sources.verify_volume", side_effect=self._verify) as verify:
+            result = self._cli("inventory", "--refresh-local")["Zakresy spisu"]
+        self.assertTrue(all(call.args[1].role == "local" for call in verify.call_args_list))
+        self.assertEqual(sum(row["pełne odczyty"] for row in result), 1)
+        with patch("media_archive.inventory.hash_source_file", side_effect=AssertionError("known file was read")):
+            result = self._cli("inventory", "--refresh-local")["Zakresy spisu"]
+        self.assertEqual(sum(row["użyte skróty"] for row in result), 1)
+
+        replacement = path.with_name("replacement")
+        replacement.write_bytes(b"new")
+        timestamp = path.stat()
+        os.utime(replacement, ns=(timestamp.st_atime_ns, timestamp.st_mtime_ns))
+        replacement.replace(path)
+        result = self._cli("inventory", "--refresh-local")["Zakresy spisu"]
+        self.assertEqual(sum(row["pełne odczyty"] for row in result), 1)
+        volume = self.config.local.volumes[0]
+        volume_id = registered_volume(self.config, DeviceKey("local", volume.alias)).volume_id
+        with open_database(self.config.app.database_file) as connection:
+            reads = load_saved_reads(connection, {volume_id})
+        attributes = SourceEntry.from_stat(path, path.stat()).volume_fingerprint()
+        self.assertEqual(reads[volume_id, path, attributes], sha256(b"new").hexdigest())
+        self.assertEqual(self._cli("inventory", "--hash-local")["Zakresy spisu"], original)
+
+    def test_refresh_local_resumes_committed_batches_and_reports_file_errors(self) -> None:
+        root = self.config.collection("photos_main").local_root
+        for name in ("a.jpg", "b.jpg", "c.jpg", "d.jpg"):
+            (root / name).write_bytes(name.encode("utf-8"))
+
+        def interrupt_after_batch(source, path, **kwargs):
+            if path.name == "c.jpg":
+                raise KeyboardInterrupt
+            return hash_source_file(source, path, **kwargs)
+
+        with (patch("media_archive.inventory._REFRESH_BATCH_SIZE", 2),
+              patch("media_archive.inventory.hash_source_file", side_effect=interrupt_after_batch)):
+            stopped = self._cli("inventory", "--refresh-local", expected=130)["Zakresy spisu"]
+        self.assertEqual(stopped[0]["pełne odczyty"], 2)
+
+        def unreadable(source, path, **kwargs):
+            if path.name == "c.jpg":
+                raise StateError("Testowy błąd odczytu.")
+            return hash_source_file(source, path, **kwargs)
+
+        with patch("media_archive.inventory.hash_source_file", side_effect=unreadable) as hashing:
+            partial = self._cli("inventory", "--refresh-local", expected=3)["Zakresy spisu"]
+        self.assertEqual({call.args[1].name for call in hashing.call_args_list}, {"c.jpg", "d.jpg"})
+        self.assertEqual(partial[0]["użyte skróty"], 2)
+        self.assertEqual(partial[0]["pełne odczyty"], 1)
+        self.assertEqual(len(partial[0]["błędy odczytu"]), 1)
+        completed = self._cli("inventory", "--refresh-local")["Zakresy spisu"]
+        self.assertEqual(completed[0]["użyte skróty"], 3)
+        self.assertEqual(completed[0]["pełne odczyty"], 1)
 
     def test_archive_inventory_announces_metadata_scan_and_save(self) -> None:
         archive = self.archives[DeviceKey("archive", "a", "data")]
