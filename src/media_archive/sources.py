@@ -4,6 +4,7 @@ from collections.abc import Callable, Generator, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from hashlib import sha256
+import json
 import os
 from pathlib import Path
 import select
@@ -72,6 +73,10 @@ class SourceEntry:
 
     def fingerprint(self) -> str:
         return f"{self.mode}:{self.size}:{self.modified_ns}:{self.changed_ns}:{self.device}:{self.inode}"
+
+    def volume_fingerprint(self) -> str:
+        """Identify a file within a registered filesystem episode across remounts."""
+        return json.dumps([self.mode, self.size, self.modified_ns, self.changed_ns, self.inode])
 
     @classmethod
     def from_stat(cls, path: Path, info: os.stat_result) -> "SourceEntry":

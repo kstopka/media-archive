@@ -132,7 +132,9 @@ def _read_scope(config: Configuration, scope: _Scope, hash_files: bool, announce
                     return files
                 observed_at = datetime.now(timezone.utc)
                 completed_bytes += entry.size
-            files.append(InventoryFile(path.as_posix(), owner, entry.size, entry.modified_ns, observed_at, sha256))
+            attributes = entry.volume_fingerprint() if sha256 is not None else None
+            files.append(InventoryFile(path.as_posix(), owner, entry.size, entry.modified_ns, observed_at,
+                                       sha256, attributes))
     return files
 
 

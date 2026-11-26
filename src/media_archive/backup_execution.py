@@ -23,8 +23,10 @@ from media_archive.devices import MountedVolume, registered_volume, verify_volum
 from media_archive.sort_conflicts import require_destination_name
 from media_archive.sources import LocalSource, ReadCancelled, SourceDigest, open_local_source
 from media_archive.state import DeviceKey, StateError, history, journal, open_database, transaction
+from media_archive.state.backup_reads import save_reads
 from media_archive.state.locking import OperationLocks, Resource, collection_resource, lock_resources
 from media_archive.state.reconciliation import require_reconciled
+from media_archive.state.registry import load_registered_devices
 from media_archive.transfer import ArchiveRead, TransferResult, _open_under_gate, execute_transfer
 
 
@@ -132,13 +134,16 @@ def _run_copy(config: Configuration, group: str, file: BackupFile, copy: BackupC
 
 
 def _fresh_copy_status(config: Configuration, group: str, files: dict[Path, BackupFile],
-                       outcomes: list[_CopyOutcome]) -> tuple[list[dict[str, object]], bool]:
+                       outcomes: list[_CopyOutcome], *, save: bool = False) -> tuple[list[dict[str, object]], bool]:
     """Check that the reads from this invocation still describe the required files."""
     reads: dict[Path, list[_CopyOutcome]] = {}
     for outcome in outcomes:
         if outcome.read is not None:
             reads.setdefault(outcome.copy.source, []).append(outcome)
     rows = []
+    cache = []
+    episodes = ({binding.key: binding.volume_id for binding in load_registered_devices(config.app.database_file)}
+                if save and reads else {})
     invalidated = False
     with ExitStack() as stack:
         mounts: dict[DeviceKey, MountedVolume] = {}
@@ -184,12 +189,29 @@ def _fresh_copy_status(config: Configuration, group: str, files: dict[Path, Back
                     for match in matches:
                         match.read = None
                         match.report["błąd końcowej weryfikacji"] = "Nie potwierdzono bieżącego stanu źródła."
+                if proofs and episodes:
+                    local_volume = next(volume for volume in config.local.volumes if path.is_relative_to(volume.root))
+                    for match in matches:
+                        if match.read is None or match.copy.digest is None:
+                            continue
+                        local_id = episodes[DeviceKey("local", local_volume.alias)]
+                        archive_id = episodes[DeviceKey("archive", match.copy.target, group)]
+                        assert local_id is not None and archive_id is not None
+                        cache.append((local_id, path.as_posix(), file.entry.volume_fingerprint(), match.copy.digest))
+                        cache.append((archive_id, match.copy.archive_path.as_posix(),
+                                      match.read.entry.volume_fingerprint(), match.copy.digest))
             readiness = "brak dwóch świeżych kopii"
             if len(proofs) == 2:
                 readiness = ("po usunięciu pliku lokalnego kolejny BACKUP może zaproponować usunięcie kopii z archiwów"
                              if file.deletions == "confirm_each_run" else "można ręcznie zwolnić miejsce")
             rows.append({"źródło": str(path), "status kopii": f"{len(proofs)}/2", "kopie": proofs,
                          "ręczne zwolnienie miejsca": readiness})
+    if cache:
+        with open_database(config.app.database_file, writable=True) as connection, transaction(connection):
+            content_ids = {digest: history.record_content(connection, digest.sha256, digest.size)
+                           for digest in dict.fromkeys(row[3] for row in cache)}
+            save_reads(connection, ((volume, path, attributes, content_ids[digest])
+                                    for volume, path, attributes, digest in cache))
     return rows, invalidated
 
 
@@ -223,19 +245,21 @@ def _read_archive_copy(config: Configuration, group: str, copy: BackupCopy, stat
 
 def execute_backup(config: Configuration, *, profile_id: str, targets: tuple[str, ...],
                    collection_id: str | None = None, month: str | None = None, pair: tuple[str, ...] = (),
-                   copy_if_elsewhere: bool = False, approve_cleanup: Approval | None = None,
+                   copy_if_elsewhere: bool = False, approve_cleanup: Approval | None = None, full_read: bool = False,
                    announce: Callable[[str], None] = lambda _: None) -> BackupPlan:
     """Run both change policies with mandatory state snapshots."""
     return _execute_backup(config, profile_id=profile_id, targets=targets, collection_id=collection_id,
                            month=month, pair=pair, copy_if_elsewhere=copy_if_elsewhere,
-                           approve_cleanup=approve_cleanup, snapshot_test=True, announce=announce)
+                           approve_cleanup=approve_cleanup if full_read else None, full_read=full_read,
+                           snapshot_test=True, announce=announce)
 
 
 def _execute_backup(config: Configuration, *, profile_id: str, targets: tuple[str, ...],
                     collection_id: str | None = None, month: str | None = None, pair: tuple[str, ...] = (),
                     copy_if_elsewhere: bool = False, replace_test: bool = False,
                     approve_cleanup: Approval | None = None, parallel_test: bool = False,
-                    snapshot_test: bool = False, announce: Callable[[str], None] = lambda _: None) -> BackupPlan:
+                    snapshot_test: bool = False, full_read: bool = True,
+                    announce: Callable[[str], None] = lambda _: None) -> BackupPlan:
     if not profile_id or not targets:
         raise StateError("BACKUP wymaga jawnego profilu i celów.")
     if approve_cleanup is not None and (month is not None or replace_test or parallel_test):
@@ -257,13 +281,14 @@ def _execute_backup(config: Configuration, *, profile_id: str, targets: tuple[st
         all_policies = fresh or approve_cleanup is not None
         plan = plan_backup(config, profile_id=profile_id, collection_id=collection_id, month=month,
                            targets=targets, pair=pair, prepare_replacements=replace_test or all_policies,
-                           coordination_trial=fresh, announce=announce)
+                           coordination_trial=fresh, full_read=full_read, prepare_transfers=not full_read,
+                           announce=announce)
         if plan.code:
             return plan
         policy = "replace_verified" if replace_test else "keep_both"
         files = {file.path: file for file in plan.files if all_policies or file.changes == policy}
         candidates = [copy for copy in plan.copies if copy.source in files]
-        if not copy_if_elsewhere and any(copy.elsewhere for copy in candidates):
+        if full_read and not copy_if_elsewhere and any(copy.elsewhere for copy in candidates):
             return replace(plan, code=3, message=(
                 "Znaleziono historyczne kopie pod inną ścieżką. Sprawdź listę i ponów BACKUP z --copy-if-elsewhere."
             ))
@@ -274,7 +299,8 @@ def _execute_backup(config: Configuration, *, profile_id: str, targets: tuple[st
             writable_targets = tuple(alias for alias in plan.details["Wybrane cele"]
                                      if group.target(alias).state == "active")
             selected = {DeviceKey("archive", alias, group.id) for alias in writable_targets}
-            recipients, capacity, blocked = preflight_snapshots(config, selected, len(candidates))
+            checks = sum(copy.action not in ("known", "review") for copy in candidates)
+            recipients, capacity, blocked = preflight_snapshots(config, selected, checks)
             plan = replace(plan, details={**plan.details, "Pojemność snapshotów": capacity})
             if blocked:
                 return replace(plan, code=3, message="Kontrola celów snapshotu zatrzymała BACKUP przed transferem.")
@@ -296,6 +322,12 @@ def _execute_backup(config: Configuration, *, profile_id: str, targets: tuple[st
                                           "ścieżka": copy.archive_path.as_posix()}
                 outcome = _CopyOutcome(copy, row)
                 outcomes.append(outcome)
+                if copy.action == "known":
+                    row["wynik"] = "zgodna z historią"
+                    continue
+                if copy.action == "review" or (not copy_if_elsewhere and copy.elsewhere):
+                    row["wynik"] = "do weryfikacji"
+                    continue
                 if copy.action == "blocked":
                     row["błąd"] = PINNED_COPY_CONFLICT
                     continue
@@ -350,16 +382,25 @@ def _execute_backup(config: Configuration, *, profile_id: str, targets: tuple[st
             outcomes = [outcome for queue in queues.values() for outcome in run_target(queue)]
         results = [outcome.report for outcome in outcomes]
         details = {**plan.details, "Wyniki BACKUP": results}
-        errors = any("błąd" in row or row.get("wynik") == "wstrzymano" for row in results)
+        errors = any("błąd" in row or row.get("wynik") in ("wstrzymano", "do weryfikacji") for row in results)
         if fresh:
             errors = errors or set(targets) != queues.keys()
         if fresh and not snapshot_test:
             rows, invalidated = _fresh_copy_status(config, profile.archive_group_id, files, outcomes)
             details["Stan kopii BACKUP"] = rows
             errors = errors or invalidated
-        elif writable_targets and approve_cleanup is not None and not errors and not interrupted.is_set():
-            _, invalidated = _fresh_copy_status(config, profile.archive_group_id, files, outcomes)
-            errors = errors or invalidated
+        elif snapshot_test:
+            if not full_read:
+                attempted = {outcome.copy.source for outcome in outcomes if outcome.copy.action == "copy"
+                             and outcome.report.get("wynik") != "do weryfikacji"}
+                files = {path: file for path, file in files.items() if path in attempted}
+            try:
+                _, invalidated = _fresh_copy_status(config, profile.archive_group_id, files, outcomes, save=True)
+            except (StateError, OSError):
+                errors = True
+                details["Błąd historii BACKUP"] = "Nie można zapisać skrótów do kolejnego szybkiego BACKUP."
+            else:
+                errors = errors or invalidated
         if interrupted.is_set():
             return replace(plan, code=130, message="Przerwano BACKUP.", details=details)
         if snapshot_test:
@@ -369,6 +410,8 @@ def _execute_backup(config: Configuration, *, profile_id: str, targets: tuple[st
                 message = "Zatrzymano transfery BACKUP na wszystkich celach. Brak miejsca."
             elif errors:
                 message = "BACKUP zakończony częściowo."
+                if any(row.get("wynik") == "do weryfikacji" for row in results):
+                    message += " Sprawdź pozycje do weryfikacji lub ponów z --full-read."
             elif writable_targets and approve_cleanup is not None:
                 try:
                     code, message, cleanup = execute_cleanup(config, profile, collection_id, writable_targets, plan.files,

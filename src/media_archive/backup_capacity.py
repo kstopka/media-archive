@@ -1,7 +1,7 @@
 """Check required archive copies and budget peak disk allocation for BACKUP."""
 
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 import unicodedata
@@ -9,15 +9,16 @@ import unicodedata
 from media_archive._transfer_files import Destination
 from media_archive.config import Configuration
 from media_archive.devices import MountedVolume
-from media_archive.sort_conflicts import choose_name, require_destination_name
+from media_archive.sort_conflicts import _name_key, _validate_name, choose_name, require_destination_name
 from media_archive.sources import SourceDigest, hash_source_file
 from media_archive.state import StateError, history, open_database, schema_version
+from media_archive.state.backup_reads import load_reads
 
 if TYPE_CHECKING:
     from media_archive.backup_planning import _Candidate
 
 
-_CopyAction = Literal["verified", "copy", "replace", "conflict", "check", "blocked"]
+_CopyAction = Literal["verified", "copy", "replace", "conflict", "check", "blocked", "known", "review"]
 _ESTIMATED_HISTORY_PAGES_PER_CHECK = 16
 PINNED_COPY_CONFLICT = "Zapisana ścieżka kopii zawiera inną treść."
 
@@ -77,14 +78,20 @@ def check_backup_capacity(
     errors: list[dict[str, str]], *, prepare_replacements: bool = False,
     proof_only: frozenset[str] | set[str] = frozenset(),
     isolate_conflicts: bool = False,
+    full_read: bool, prepare_transfers: bool, archive_group: str, archive_root: Path,
+    archive_ids: dict[str, int],
 ) -> tuple[tuple[BackupCopy, ...], set[str], list[dict[str, object]], int]:
     target_disks = {volume.physical_device for volume in selected.values()}
     if len(target_disks) != len(selected) or target_disks & source_disks:
         raise StateError("Cele BACKUP muszą leżeć na różnych fizycznych dyskach, osobnych od źródeł.")
     with open_database(config.app.database_file) as connection:
-        if schema_version(connection) < "0011":
+        if schema_version(connection) < "0015":
             raise StateError("BACKUP wymaga aktualnej bazy. Użyj migrate.")
         assignments = history.load_backup_assignments(connection, {item.file.collection_id for item in candidates})
+        reads = {} if full_read or not candidates else load_reads(
+            connection, {item.volume_id for item in candidates} | set(archive_ids.values()),
+            archive_group=archive_group, archive_root=archive_root,
+        )
     saved: dict[tuple[Path, int, str], dict[SourceDigest, set[RequiredPair]]] = {}
     for row in assignments:
         contents = saved.setdefault((Path(row.path), row.volume_id, row.collection_id), {})
@@ -118,14 +125,39 @@ def check_backup_capacity(
     reserved_directories: set[tuple[str, Path]] = set()
     planned_paths: dict[tuple[str, Path], Path] = {}
     planned_directories: set[tuple[str, Path]] = set()
+    uncertain_paths: set[tuple[str, Path]] = set()
+    uncertain_directories: set[tuple[str, Path]] = set()
     for item in candidates:
         file = item.file
         try:
             digest = None
             prior = saved.get((file.path, item.volume_id, file.collection_id), {})
             required = set()
-            if any(identity.size == file.size for identity in prior):
+            existing = {identity for identity in prior if identity.size == file.size}
+            if full_read and existing:
                 digest = hash_source_file(item.source, item.entry.path, expected=item.entry)
+            elif not full_read:
+                sha256 = reads.get((item.volume_id, file.path, item.entry.volume_fingerprint()))
+                if sha256 is not None:
+                    digest = SourceDigest(sha256, file.size)
+            if existing and digest is None:
+                possible = {pair for identity in existing for pair in prior[identity]}
+                has_selected_path = False
+                for alias in selected:
+                    paths = {dict(pair.pinned).get(devices[alias], pair.path)
+                             for pair in possible if devices[alias] in pair.devices}
+                    if devices[alias] in proposed_pair or not proposed_pair:
+                        paths.add(file.archive_path)
+                    for path in sorted(paths):
+                        has_selected_path = True
+                        normalized = _path_key(path)
+                        uncertain_paths.add((alias, normalized))
+                        uncertain_directories.update((alias, parent) for parent in normalized.parents)
+                        copies.append(BackupCopy(file.path, alias, path, "review",
+                                                 RequiredPair(frozenset(), path), None))
+                outside_selected += int(not has_selected_path)
+                continue
+            if digest is not None:
                 required = prior.get(digest, set())
             if len(required) > 1:
                 raise StateError("Ta treść i lokalizacja mają sprzeczne zapisane przypisania archiwalne.")
@@ -154,6 +186,7 @@ def check_backup_capacity(
         return (key in reserved_paths or key in reserved_directories or key in planned_paths
                 or key in planned_directories)
 
+    directory_names: dict[tuple[str, Path], dict[str, list[str]]] = {}
     for item, pair, digest, aliases in assignments_to_check:
         file = item.file
         pinned_paths = dict(pair.pinned)
@@ -165,9 +198,10 @@ def check_backup_capacity(
             path = pinned or pair.path
             try:
                 reused = False
-                if digest is None and (file.changes == "keep_both" or prepare_replacements or alias in proof_only):
+                if (full_read and digest is None
+                        and (file.changes == "keep_both" or prepare_replacements or alias in proof_only)):
                     digest = hash_source_file(item.source, item.entry.path, expected=item.entry)
-                if budget is not None:
+                if full_read and budget is not None:
                     destination = Destination(budget.volume, path)
                     if file.changes == "keep_both" and pinned is None:
                         assert digest is not None
@@ -175,6 +209,20 @@ def check_backup_capacity(
                         path, reused = choice.path, choice.reused
                     else:
                         require_destination_name(destination)
+                destination = Destination(selected[alias], path)
+                if not full_read:
+                    if file.changes == "keep_both" and pinned is None:
+                        _validate_name(path.name)
+                    parent = (alias, path.parent)
+                    if parent not in directory_names:
+                        names: dict[str, list[str]] = {}
+                        for name in destination.sibling_names(_name_key):
+                            names.setdefault(_name_key(name), []).append(name)
+                        directory_names[parent] = names
+                    matches = directory_names[parent].get(_name_key(path.name), [])
+                    if matches and matches != [path.name]:
+                        copies.append(BackupCopy(file.path, alias, path, "review", pair, digest))
+                        continue
                 normalized = _path_key(path)
                 key = (alias, normalized)
                 parents = {(alias, parent) for parent in normalized.parents}
@@ -184,11 +232,31 @@ def check_backup_capacity(
                     raise StateError("W partii ta sama ścieżka archiwalna jest wymagana jako plik i katalog.")
                 planned_paths[key] = file.path
                 planned_directories.update(parents)
+                if not full_read:
+                    entry = destination.file_attributes()
+                    if entry is not None:
+                        volume_id = archive_ids[alias]
+                        previous_sha = reads.get((volume_id, path, entry.volume_fingerprint()))
+                        action = ("known" if digest is not None and entry.size == digest.size
+                                  and previous_sha == digest.sha256 else "review")
+                    elif (budget is None or key in uncertain_paths or key in uncertain_directories
+                          or parents.intersection(uncertain_paths)):
+                        action = "review"
+                    else:
+                        action = "copy"
+                    if action == "copy":
+                        assert budget is not None
+                        budget.transfer_parents.update(destination.preflight())
+                        budget.media_bytes += budget.allocated(file.size)
+                        budget.results[action] += 1
+                        if item.month is not None:
+                            months.add(item.month)
+                    copies.append(BackupCopy(file.path, alias, path, action, pair, digest))
+                    continue
                 if budget is None:
                     assert digest is not None
                     copies.append(BackupCopy(file.path, alias, path, "check", pair, digest))
                     continue
-                destination = Destination(budget.volume, path)
                 size = destination.file_size()
                 reused = reused and size == file.size
                 previous = None
@@ -228,7 +296,7 @@ def check_backup_capacity(
                 _issue(errors, path, error, alias=alias)
 
     # Every future transfer and recorded check can add history rows before the generation is taken.
-    sizes = snapshot_sizes(config, len(copies))
+    sizes = snapshot_sizes(config, sum(copy.action not in ("known", "review") for copy in copies))
     capacity = []
     for alias, budget in budgets.items():
         snapshot_bytes = (sum(map(budget.allocated, sizes))
@@ -246,6 +314,20 @@ def check_backup_capacity(
         })
         if required > budget.available:
             errors.append({"cel": alias, "ścieżka": ".", "błąd": "Za mało miejsca na cały BACKUP i wymaganą rezerwę."})
+    if prepare_transfers and not errors:
+        by_path = {item.file.path: item for item in candidates}
+        digests: dict[Path, SourceDigest | None] = {}
+        for index, copy in enumerate(copies):
+            if copy.action != "copy" or copy.digest is not None:
+                continue
+            if copy.source not in digests:
+                item = by_path[copy.source]
+                try:
+                    digests[copy.source] = hash_source_file(item.source, item.entry.path, expected=item.entry)
+                except (OSError, StateError) as error:
+                    _issue(errors, copy.source, error)
+                    digests[copy.source] = None
+            copies[index] = replace(copy, digest=digests[copy.source])
     return tuple(copies), months, capacity, outside_selected
 
 

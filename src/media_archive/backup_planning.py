@@ -258,7 +258,8 @@ def _probe_targets(config: Configuration, stack: ExitStack, group_ids: set[str],
 def plan_backup(config: Configuration, *, profile_id: str | None = None, collection_id: str | None = None,
                 month: str | None = None, targets: tuple[str, ...] = (), pair: tuple[str, ...] = (),
                 announce: Callable[[str], None] = lambda _: None, prepare_replacements: bool = False,
-                coordination_trial: bool = False) -> BackupPlan:
+                coordination_trial: bool = False, full_read: bool = False,
+                prepare_transfers: bool = False) -> BackupPlan:
     """Select a registered profile and build a read-only candidate manifest."""
     check_application_paths(config)
     first = _month(month) if month is not None else None
@@ -297,13 +298,14 @@ def plan_backup(config: Configuration, *, profile_id: str | None = None, collect
         if len(selected) > 2 or not set(targets) <= allowed:
             return BackupPlan(3, "Wybierz jeden albo dwa dostępne cele przez --profile i --targets.", details)
         return _plan_scope(config, stack, profile, selected, collection_id, first, details, pair, announce,
-                           prepare_replacements, coordination_trial)
+                           prepare_replacements, coordination_trial, full_read, prepare_transfers)
 
 
 def _plan_scope(config: Configuration, stack: ExitStack, profile: BackupProfile,
                 selected: dict[str, MountedVolume], collection_id: str | None, first: date | None,
                 details: dict[str, object], pair: tuple[str, ...], announce: Callable[[str], None],
-                prepare_replacements: bool, coordination_trial: bool) -> BackupPlan:
+                prepare_replacements: bool, coordination_trial: bool, full_read: bool,
+                prepare_transfers: bool) -> BackupPlan:
     roots = config.profile_collections(profile.id)
     details["Zakresy BACKUP"] = [{"zbiór": "Wszystko", "label": profile.label}, *(
         {"zbiór": item.id, "label": item.label, "miesiące": bool(config.month_collections(item.id))} for item in roots
@@ -321,12 +323,15 @@ def _plan_scope(config: Configuration, stack: ExitStack, profile: BackupProfile,
     bindings = {item.key: item for item in load_registered_devices(config.app.database_file)}
     devices = {key.alias: item.device_id for key, item in bindings.items()
                if key.role == "archive" and key.group_id == group.id and item.device_id is not None}
+    archive_ids = {key.alias: item.volume_id for key, item in bindings.items()
+                   if key.role == "archive" and key.group_id == group.id and item.volume_id is not None}
     local_ids = {}
     for volume in config.local.volumes:
         binding = bindings[DeviceKey("local", volume.alias)]
         if binding.volume_id is not None:
             local_ids[volume.root] = binding.volume_id
-    if not devices.keys() >= {target.alias for target in group.targets} or len(local_ids) != len(config.local.volumes):
+    if (not devices.keys() >= {target.alias for target in group.targets}
+            or not archive_ids.keys() >= selected.keys() or len(local_ids) != len(config.local.volumes)):
         raise StateError("Plan BACKUP wymaga zarejestrowanych urządzeń i woluminów.")
     active = tuple(target.alias for target in group.targets if target.state == "active")
     pair = pair or (active if len(active) == 2 else ())
@@ -358,16 +363,18 @@ def _plan_scope(config: Configuration, stack: ExitStack, profile: BackupProfile,
         prepare_replacements=prepare_replacements,
         proof_only={alias for alias in selected if group.target(alias).state == "read_only"},
         isolate_conflicts=coordination_trial,
+        full_read=full_read, prepare_transfers=prepare_transfers, archive_group=group.id, archive_root=archive_root,
+        archive_ids={alias: archive_ids[alias] for alias in selected},
     )
     locations = []
     annotated = []
     owners = {item.file.path: item.file.collection_id for item in candidates}
     with open_database(config.app.database_file) as connection:
         for copy in copies:
-            if _archive_owner(copy.archive_path, reserved) != owners[copy.source]:
+            if copy.action != "review" and _archive_owner(copy.archive_path, reserved) != owners[copy.source]:
                 _issue(errors, copy.archive_path, StateError("Planowana kopia koliduje z zarezerwowanym celem."),
                        alias=copy.target)
-            if copy.action in ("verified", "check", "blocked") or copy.digest is None:
+            if copy.action in ("verified", "check", "blocked", "known", "review") or copy.digest is None:
                 annotated.append(copy)
                 continue
             content = history.find_content(connection, copy.digest.sha256, copy.digest.size)
@@ -381,6 +388,17 @@ def _plan_scope(config: Configuration, stack: ExitStack, profile: BackupProfile,
     copies = tuple(annotated)
     if locations:
         details["Historyczne kopie pod inną ścieżką"] = locations
+    if not full_read:
+        counts = Counter((copy.target, copy.action) for copy in copies)
+        details["Podsumowanie szybkiego BACKUP"] = [
+            {"cel": alias, "do skopiowania": counts[alias, "copy"], "zgodne z historią": counts[alias, "known"],
+             "do weryfikacji": counts[alias, "review"]} for alias in selected
+        ]
+        if any(copy.action == "review" for copy in copies):
+            details["Kopie do weryfikacji"] = [
+                {"źródło": str(copy.source), "cel": copy.target, "ścieżka": copy.archive_path.as_posix()}
+                for copy in copies if copy.action == "review"
+            ]
     if layouts and (collection_id is not None or first is not None):
         months = sorted(pending_months, reverse=True)
         details["Miesiące z transferami"] = months

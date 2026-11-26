@@ -4,7 +4,7 @@ Collections with `replace_verified` use controlled replacement within the regula
 
 ```bash
 media-archive backup --dry-run --profile data --collection documents --targets a
-media-archive backup --yes --profile data --collection documents --targets a
+media-archive backup --yes --full-read --profile data --collection documents --targets a
 ```
 
 BACKUP repeats whole-scope capacity planning under the archive and collection locks. At another historical path, a copy requires explicit approval with `--copy-if-elsewhere`.
@@ -17,7 +17,7 @@ BACKUP repeats whole-scope capacity planning under the archive and collection lo
 
 ## Recovery and limits
 
-Repeat `backup --yes` with the same configuration, scope and targets. If the previous file is still present and matches the recorded intent, transfer can restart. If the new file is already present, BACKUP rereads it and commits fresh evidence without copying again. If the destination differs from both, the operation stops for inspection. An interrupted part can remain on disk and contributes to measured space usage.
+Repeat `backup --yes --full-read` with the same configuration, scope and targets. If the previous file is still present and matches the recorded intent, transfer can restart. If the new file is already present, BACKUP rereads it and commits fresh evidence without copying again. If the destination differs from both, the operation stops for inspection. An interrupted part can remain on disk and contributes to measured space usage.
 
 When the source has changed again, recovery first checks unfinished replacements at the same required path on the same archive volume. If the destination contains the earlier operation's published bytes, BACKUP records that result before starting the next replacement. If the earlier publication cannot be confirmed, BACKUP pauses at that path and reports the pending operation ID.
 

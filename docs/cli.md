@@ -33,13 +33,13 @@ Use `media-archive` or `python -m media_archive`. Put `--config FILE` before the
 | `conflicts [--keep-both GROUP]` | List [SORT conflicts](catalog.md#review-decisions) or save a review decision. |
 | `catalog-move ID ABSOLUTE_PATH` | Verify an [existing manual move](catalog.md#reconcile-a-manual-move) and update the catalog. |
 | `backup --dry-run [--profile ID] [--targets ALIAS ...] [--pair ALIAS ALIAS] [--collection ID] [--month YYYY-MM]` | Preview [BACKUP scope, policies and capacity](backup-planning.md). |
-| `backup --yes --profile ID --targets ALIAS ... [--pair ALIAS ALIAS] [--collection ID] [--month YYYY-MM] [--copy-if-elsewhere]` | Run verified BACKUP and publish [state snapshots](backup-snapshots.md). An All-scope run prompts separately in an interactive terminal before any [eligible archive cleanup](backup-cleanup.md). |
+| `backup --yes --profile ID --targets ALIAS ... [--pair ALIAS ALIAS] [--collection ID] [--month YYYY-MM] [--copy-if-elsewhere] [--full-read]` | Copy missing files with full verification and publish [state snapshots](backup-snapshots.md). Add `--full-read` to verify existing copies and resolve conflicts. All-scope cleanup also requires `--full-read` and an interactive confirmation. |
 
 All commands that need existing state report a missing database as an error. Setup and migration use the [SQLite lifecycle](state.md#first-setup-and-upgrades). The configuration wizard is a separate planned feature. Camera import uses the [journal](journal.md) and [history](history.md).
 
 The [snapshot reference](snapshots.md) covers generation contents, filesystem effects and the reconciliation requirement.
 
-The recovery preview distinguishes a new attempt from an explicit takeover of an unfinished attempt. A takeover requires acquiring the operation's locks first. The preview reports the suggested action from the journal state. For an unfinished BACKUP, repeat `backup --yes` with the same configuration, profile, scope and intended targets so the command can verify the current destinations and recalculate capacity.
+The recovery preview distinguishes a new attempt from an explicit takeover of an unfinished attempt. A takeover requires acquiring the operation's locks first. The preview reports the suggested action from the journal state. For an unfinished BACKUP, repeat `backup --yes` with the same configuration, profile, scope and intended targets. Add `--full-read` if the existing destination needs verification.
 
 ## Reports and exit status
 

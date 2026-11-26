@@ -219,6 +219,8 @@ def _parser() -> argparse.ArgumentParser:
     backup_mode = backup.add_mutually_exclusive_group(required=True)
     backup_mode.add_argument("--dry-run", action="store_true", help="tylko odczyt i podgląd zakresu")
     backup_mode.add_argument("--yes", action="store_true", help="wykonaj BACKUP i zapisz snapshoty stanu")
+    backup.add_argument("--full-read", action="store_true",
+                        help="przeczytaj treść całego wybranego zakresu i zweryfikuj istniejące kopie")
     backup.add_argument("--copy-if-elsewhere", action="store_true",
                         help="zatwierdź nową kopię mimo zapisanej kopii pod inną ścieżką")
     backup.add_argument("--profile", metavar="PROFIL")
@@ -259,6 +261,8 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             parser.error("BACKUP --yes wymaga --profile PROFIL i --targets CEL.")
         if args.copy_if_elsewhere and args.dry_run:
             parser.error("--copy-if-elsewhere wymaga BACKUP --yes.")
+        if args.full_read and not args.yes:
+            parser.error("--full-read wymaga BACKUP --yes.")
     if args.command in ("import", "resume") and (args.card is None) != (args.mount is None):
         parser.error("Import z karty wymaga jednocześnie --card i --mount.")
     if args.command == "import" and args.full_read and args.card is not None:
@@ -415,10 +419,11 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
                              targets=tuple(args.targets or ()), pair=tuple(args.pair or ()))
             if args.yes:
                 outcome = execute_backup(config, **selection, copy_if_elsewhere=args.copy_if_elsewhere,
+                                         full_read=args.full_read,
                                          approve_cleanup=_confirm_cleanup if args.month is None else None,
                                          announce=_announce_backup)
             else:
-                outcome = plan_backup(config, **selection, prepare_replacements=True, announce=_announce_backup)
+                outcome = plan_backup(config, **selection, announce=_announce_backup)
             code, message, details = outcome.code, outcome.message, outcome.details
         elif args.command == "reconcile":
             try:

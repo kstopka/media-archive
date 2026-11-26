@@ -98,10 +98,20 @@ class Report:
                 for item in value:
                     lines.append(f"- {item['źródło']} · cel {item['cel']}")
                     lines.extend(f"  {path}" for path in item["zapisane ścieżki"])
+            elif key == "Podsumowanie szybkiego BACKUP":
+                lines.append(key)
+                for item in value:
+                    lines.append(f"- {item['cel']} · do skopiowania {item['do skopiowania']}"
+                                 f" · zgodne z historią {item['zgodne z historią']}"
+                                 f" · do weryfikacji {item['do weryfikacji']}")
+            elif key == "Kopie do weryfikacji":
+                lines.append(key)
+                lines.extend(f"- {item['cel']} · {item['ścieżka']}" for item in value)
             elif key == "Wyniki BACKUP":
                 for item in value:
                     status = item.get("wynik", item.get("błąd"))
-                    lines.append(f"- {item['cel']} · {item['ścieżka']} · {status}")
+                    if status != "zgodna z historią":
+                        lines.append(f"- {item['cel']} · {item['ścieżka']} · {status}")
             elif key == "Błędy planowania":
                 lines.extend(f"- {item['ścieżka']} · {item['błąd']}"
                              + (f" · cel {item['cel']}" if "cel" in item else "") for item in value)

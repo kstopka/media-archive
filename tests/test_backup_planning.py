@@ -23,8 +23,12 @@ from media_archive.devices import VolumeUnavailable
 from media_archive.import_restore import reconcile_imports
 from media_archive.sources import LocalSource
 from media_archive.state import DeviceKey, StateError, history, journal, open_database, transaction
+from media_archive.state.audit import confirm_distinct_disks, save_checkpoint, start_full_audit, update_full_audit_target
 from media_archive.state.catalog import load_locations
-from media_archive.state.registry import initialize_database, load_registered_devices, register_configuration
+from media_archive.state.inventory import InventoryFile, save_scope
+from media_archive.state.registry import (
+    change_registered_volume, initialize_database, load_registered_devices, register_configuration,
+)
 from media_archive.state.reconciliation import load_reconciliation
 from media_archive.state.snapshots import restore_snapshot, validate_snapshot
 from tests.config_fixtures import registry_values, write_config
@@ -111,7 +115,7 @@ class BackupPlanningTests(unittest.TestCase):
         self._archive_file("data", "a", "photos_main", feb)
         self._archive_file("data", "a", "photos_secondary", feb)
         self._archive_file("data", "a", "photos_secondary", jan, b"other")
-        arguments = dict(profile_id="data", collection_id="photos")
+        arguments = dict(profile_id="data", collection_id="photos", full_read=True)
         first = plan_backup(self.config, **arguments, targets=("a",))
         self.assertEqual(first.details["Zakresy zbioru"], ["Wszystko", "2025-01"])
         self.connected.add(("data", "b"))
@@ -165,7 +169,7 @@ class BackupPlanningTests(unittest.TestCase):
         self._archive_file("data", "a", "documents", "signed.pdf", b"old")
         group = self.config.archive_group("data")
         archive = group.target("a").mount / group.root_relative / self.config.collection("documents").archive_relative
-        command = ["backup", "--yes", "--profile", "data", "--collection", "documents"]
+        command = ["backup", "--yes", "--full-read", "--profile", "data", "--collection", "documents"]
 
         def copy_corrupted(part, source_fd):
             Path(f"/proc/self/fd/{part.directory}/copy").write_bytes(b"broken")
@@ -218,7 +222,7 @@ class BackupPlanningTests(unittest.TestCase):
             return (reserve if destination.volume.root == group.target("b").mount else 10 * reserve, 4096)
 
         with patch("media_archive.backup_capacity.Destination.space", autospec=True, side_effect=space):
-            plan = plan_backup(self.config, profile_id="data")
+            plan = plan_backup(self.config, profile_id="data", full_read=True)
         self.assertEqual(plan.code, 3)
         self.assertEqual(plan.details["Wybrane cele"], ["a", "b"])
         statuses = {item["cel"]: item["stan"] for item in plan.details["Cele BACKUP"]}
@@ -260,7 +264,8 @@ class BackupPlanningTests(unittest.TestCase):
                                                    collection_id="documents", volume_id=local_volume)
             history.assign_archive_pair(connection, occurrence, a, b, required.as_posix())
         before = self.database.read_bytes()
-        plan = plan_backup(config, profile_id="data", collection_id="documents", targets=("a", "c"), pair=("c", "d"))
+        plan = plan_backup(config, profile_id="data", collection_id="documents", targets=("a", "c"), pair=("c", "d"),
+                           full_read=True)
         self.assertEqual(plan.code, 0)
         copies = {(copy.source, copy.target): copy for copy in plan.copies}
         self.assertEqual(set(copies), {(existing, "a"), (new, "c")})
@@ -310,7 +315,8 @@ class BackupPlanningTests(unittest.TestCase):
                                                            collection_id="documents", volume_id=local)
                     path = Path(group.root_relative) / "Documents/ALBUM"
                     history.assign_archive_pair(connection, occurrence, a, b, path.as_posix())
-                plan = plan_backup(self.config, profile_id="data", targets=("a",), collection_id="documents")
+                plan = plan_backup(self.config, profile_id="data", targets=("a",), collection_id="documents",
+                                   full_read=True)
                 self.assertEqual(plan.code, 3)
                 error, = plan.details["Błędy planowania"]
                 self.assertIn("plik i katalog", error["błąd"])
@@ -346,13 +352,94 @@ class BackupPlanningTests(unittest.TestCase):
             return _execute_backup(self.config, profile_id="data", targets=targets, collection_id=collection_id,
                                    parallel_test=True)
 
-    def _snapshot_backup(self, targets=("a", "b"), collection_id="documents", approve_cleanup=None):
+    def _snapshot_backup(self, targets=("a", "b"), collection_id="documents", approve_cleanup=None, *, full_read=True):
         with (patch("media_archive.transfer.verify_volume", side_effect=self._verify_volume),
               patch("media_archive.backup_execution.verify_volume", side_effect=self._verify_volume),
               patch("media_archive.backup_execution.open_local_source", side_effect=self._backup_source),
               patch("media_archive.backup_snapshots.verify_volume", side_effect=self._verify_volume)):
             return execute_backup(self.config, profile_id="data", targets=targets, collection_id=collection_id,
-                                  approve_cleanup=approve_cleanup)
+                                  approve_cleanup=approve_cleanup, full_read=full_read)
+
+    @unittest.skipUnless(shutil.which("rsync"), "requires rsync")
+    def test_quick_backup_copies_missing_files_and_reuses_full_reads(self) -> None:
+        self.connected.add(("data", "b"))
+        local = self._file("documents", "new.pdf")
+        options = dict(profile_id="data", collection_id="documents", targets=("a", "b"))
+        with patch("media_archive.backup_capacity.hash_source_file", side_effect=AssertionError("Preview reads metadata")):
+            preview = plan_backup(self.config, **options)
+        self.assertEqual([copy.action for copy in preview.copies], ["copy", "copy"])
+        created = self._snapshot_backup(full_read=False)
+        self.assertEqual(created.code, 0, created.details)
+        self.assertEqual(created.details["Stan kopii BACKUP"][0]["status kopii"], "2/2")
+
+        with (patch("media_archive.backup_capacity.hash_source_file", side_effect=AssertionError("Known source")),
+              patch.object(Destination, "recover_file", side_effect=AssertionError("Known archive copy")),
+              patch.object(Part, "rsync_from", side_effect=AssertionError("No transfer expected"))):
+            repeated = self._snapshot_backup(full_read=False)
+        self.assertEqual(repeated.code, 0, repeated.details)
+        self.assertEqual([copy.action for copy in repeated.copies], ["known", "known"])
+        self.assertEqual(repeated.details["Stan kopii BACKUP"], [])
+
+        replacement = local.with_name("replacement")
+        replacement.write_bytes(b"other")
+        replacement.replace(local)
+        self._file("documents", "second.pdf", b"new file")
+        different = self._snapshot_backup(full_read=False)
+        self.assertEqual(different.code, 3, different.details)
+        self.assertEqual([row["wynik"] for row in different.details["Wyniki BACKUP"]].count("do weryfikacji"), 2)
+        self.assertEqual([row["wynik"] for row in different.details["Wyniki BACKUP"]].count("skopiowano"), 2)
+        full = self._snapshot_backup()
+        self.assertEqual(full.code, 0, full.details)
+        self.assertEqual([row["status kopii"] for row in full.details["Stan kopii BACKUP"]], ["2/2", "2/2"])
+
+    def test_quick_backup_uses_matching_inventory_and_completed_audit_reads(self) -> None:
+        self.connected.add(("data", "b"))
+        local = self._file("documents", "known.pdf")
+        self._archive_file("data", "a", "documents", "known.pdf")
+        self._archive_file("data", "b", "documents", "known.pdf")
+        ids = {binding.key: binding.volume_id for binding in load_registered_devices(self.database)}
+        group = self.config.archive_group("data")
+        root = Path(group.root_relative)
+        relative = Path(self.config.collection("documents").archive_relative) / local.name
+        target_keys = [DeviceKey("archive", name, "data") for name in ("a", "b")]
+        local_key = DeviceKey("local", self.config.local.volumes[0].alias)
+        digest = sha256(b"media").hexdigest()
+        now = datetime.now(timezone.utc)
+        with (self._verify_volume(self.config, local_key) as volume,
+              open_database(self.database, writable=True) as connection):
+            entry = LocalSource(volume, None).attributes(local.relative_to(volume.root))
+            save_scope(connection, "hashed-local", "local", ids[local_key], (
+                InventoryFile(local.as_posix(), "documents", entry.size, entry.modified_ns, now, digest,
+                              entry.volume_fingerprint()),
+            ))
+            audit = start_full_audit(connection, "data", root, ((key.alias, ids[key]) for key in target_keys))
+            confirm_distinct_disks(connection, audit)
+            for position, key in enumerate(target_keys, start=1):
+                with self._verify_volume(self.config, key) as target:
+                    entry = LocalSource(target, None).attributes(root / relative)
+                    save_checkpoint(connection, audit, position, ids[key], root, relative,
+                                    entry.volume_fingerprint(), entry.size, entry.modified_ns, digest, now)
+                if position == 1:
+                    update_full_audit_target(connection, audit, position, inventory="{}", scanned_at=now.isoformat(),
+                                             hardware="[]")
+            options = dict(profile_id="data", collection_id="documents", targets=("a", "b"))
+            incomplete = plan_backup(self.config, **options)
+            self.assertEqual([copy.action for copy in incomplete.copies], ["review", "review"])
+            update_full_audit_target(connection, audit, 2, inventory="{}", scanned_at=now.isoformat(), hardware="[]")
+        with patch.object(Destination, "recover_file", side_effect=AssertionError("Audit proof should be reused")):
+            preview = plan_backup(self.config, **options)
+        self.assertEqual([copy.action for copy in preview.copies], ["known", "known"])
+        self._archive_file("data", "a", "documents", "known.pdf", b"other")
+        changed = plan_backup(self.config, **options)
+        self.assertEqual([copy.action for copy in changed.copies], ["review", "known"])
+
+        previous = next(binding for binding in load_registered_devices(self.database) if binding.key == target_keys[1])
+        new_uuid = "reformatted-archive-test"
+        settings = self.settings.read_text(encoding="utf-8")
+        self.settings.write_text(settings.replace(previous.uuid, new_uuid), encoding="utf-8")
+        change_registered_volume(self.database, previous, "reformat", new_uuid, previous.hardware_id, dry_run=False)
+        rebound = plan_backup(load_config(self.settings), **options)
+        self.assertEqual([copy.action for copy in rebound.copies], ["review", "review"])
 
     def _snapshot_root(self, alias):
         return self.config.archive_group("data").target(alias).mount / self.config.app.archive_state_dir
@@ -962,8 +1049,10 @@ class BackupPlanningTests(unittest.TestCase):
               patch("media_archive.backup_cleanup.verify_volume", side_effect=self._verify_volume)):
             with patch("media_archive.backup_execution.execute_cleanup") as cleanup:
                 self.assertEqual(main([*args, "--month", "2025-02"]), 0)
+                self.assertEqual(main(args), 0)
+                self.assertEqual(main([*args, "--month", "2025-02", "--full-read"]), 0)
                 cleanup.assert_not_called()
-            self.assertEqual(main(args), 0)
+            self.assertEqual(main([*args, "--full-read"]), 0)
         self.assertIn("old.jpg", output.getvalue())
         self.assertEqual(archived.read_bytes(), b"old")
 
@@ -989,7 +1078,8 @@ class BackupPlanningTests(unittest.TestCase):
         self.assertEqual(code, 0, output.getvalue())
         self.assertIn("data/b · tylko do odczytu", output.getvalue())
         self.assertEqual(self.database.read_bytes(), original)
-        preview = plan_backup(self.config, profile_id="data", collection_id="photos", targets=("a", "b"))
+        preview = plan_backup(self.config, profile_id="data", collection_id="photos", targets=("a", "b"),
+                              full_read=True)
         self.assertEqual([(copy.target, copy.action) for copy in preview.copies], [("a", "verified"), ("b", "check")])
         self.assertEqual([row["cel"] for row in preview.details["Pojemność BACKUP"]], ["a"])
         automatic = plan_backup(self.config, profile_id="data", collection_id="photos")
@@ -1228,7 +1318,7 @@ class BackupPlanningTests(unittest.TestCase):
         with open_database(self.database) as connection:
             operation, = journal.load_unfinished(connection)
             self.assertEqual(operation.operation_key.split(":", 1)[0], "backup")
-            self.assertEqual(journal.backup_retry_command(operation), "backup --yes")
+            self.assertEqual(journal.backup_retry_command(operation), "backup --yes --full-read")
         self.assertEqual(outcome["wynik"], "przerwano")
         with patch.object(Part, "rsync_from", side_effect=AssertionError("plik jest już opublikowany")):
             resumed = self._append()

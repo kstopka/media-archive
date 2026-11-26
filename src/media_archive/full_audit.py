@@ -36,13 +36,8 @@ class _Side:
     unavailable: str | None = None
 
 
-def _attributes(entry: SourceEntry) -> str:
-    # The volume episode identifies the filesystem across remounts.
-    return json.dumps([entry.mode, entry.size, entry.modified_ns, entry.changed_ns, entry.inode])
-
-
 def _save_inventory(side: _Side) -> str:
-    return json.dumps({path.as_posix(): _attributes(entry) for path, entry in side.scan.entries.items()})
+    return json.dumps({path.as_posix(): entry.volume_fingerprint() for path, entry in side.scan.entries.items()})
 
 
 def _load_inventory(side: _Side, stored: dict[Path, Checkpoint]) -> bool:
@@ -53,7 +48,7 @@ def _load_inventory(side: _Side, stored: dict[Path, Checkpoint]) -> bool:
         mode, size, modified, changed, inode = json.loads(attributes)
         path = Path(name)
         entries[path] = SourceEntry(path, mode, size, modified, changed, 0, inode)
-    if any(path not in stored or stored[path].attributes != _attributes(entry)
+    if any(path not in stored or stored[path].attributes != entry.volume_fingerprint()
            for path, entry in entries.items() if stat.S_ISREG(entry.mode)):
         raise StateError("Zapis pełnego audytu nie zawiera wszystkich wymaganych skrótów.")
     side.scan.entries = entries
@@ -85,7 +80,7 @@ def _hash_side(connection: Connection, run_id: str, root: Path, side: _Side,
     files = {path: entry for path, entry in side.scan.entries.items() if stat.S_ISREG(entry.mode)}
     discard_checkpoints(connection, run_id, side.state.position, (
         path for path, checkpoint in stored.items()
-        if (path in files and _attributes(files[path]) != checkpoint.attributes)
+        if (path in files and files[path].volume_fingerprint() != checkpoint.attributes)
         or (path not in files and side.scan.covers(path))
     ))
     total_bytes = sum(entry.size for entry in files.values())
@@ -103,7 +98,7 @@ def _hash_side(connection: Connection, run_id: str, root: Path, side: _Side,
     announce(f"Nośnik {side.state.alias} · do sprawdzenia {format_count(len(files))} plików, {format_size(total_bytes)}.")
     for path, entry in files.items():
         old = stored.get(path)
-        if old is not None and old.attributes != _attributes(entry):
+        if old is not None and old.attributes != entry.volume_fingerprint():
             old = None  # Already discarded after listing.
         if old is not None:
             try:
@@ -130,7 +125,7 @@ def _hash_side(connection: Connection, run_id: str, root: Path, side: _Side,
                 continue
             side.hashes[path] = save_checkpoint(
                 connection, run_id, side.state.position, side.state.volume_id, root, path,
-                _attributes(entry), digest.size, entry.modified_ns, digest.sha256, datetime.now(timezone.utc),
+                entry.volume_fingerprint(), digest.size, entry.modified_ns, digest.sha256, datetime.now(timezone.utc),
             )
         committed_bytes += entry.size
         progress(0, 0)

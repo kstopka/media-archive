@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import bindparam, column, select, table
+from sqlalchemy import and_, bindparam, column, select, table
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.engine import Connection, RowMapping
 from sqlalchemy.sql.selectable import TableClause
@@ -81,6 +81,24 @@ def load_checkpoints(connection: Connection, run_id: str, position: int) -> dict
         ))
         return {Path(path): Checkpoint(attributes, sha256, read_at, content_id)
                 for path, attributes, sha256, read_at, content_id in rows}
+
+
+def archive_checkpoint_reads(connection: Connection, group: str, root: Path,
+                             volume_ids: set[int]) -> dict[tuple[int, Path, str], str]:
+    other = _targets.alias()
+    rows = connection.execute(
+        select(_targets.c.volume_id, _checkpoints.c.path, _checkpoints.c.attributes, history.contents.c.sha256)
+        .select_from(_runs.join(_targets, _runs.c.id == _targets.c.run_id)
+                     .join(other, and_(other.c.run_id == _runs.c.id, other.c.position != _targets.c.position))
+                     .join(_checkpoints, and_(_checkpoints.c.run_id == _runs.c.id,
+                                              _checkpoints.c.position == _targets.c.position))
+                     .join(history.contents, history.contents.c.id == _checkpoints.c.content_id))
+        .where(_runs.c.group_id == group, _runs.c.root == root.as_posix(), _runs.c.distinct_disks.is_(True),
+               _targets.c.scanned_at.is_not(None), other.c.scanned_at.is_not(None),
+               _targets.c.volume_id.in_(volume_ids))
+        .order_by(_checkpoints.c.read_at)
+    )
+    return {(volume, root / path, attributes): digest for volume, path, attributes, digest in rows}
 
 
 def discard_checkpoints(connection: Connection, run_id: str, position: int, paths: Iterable[Path]) -> None:

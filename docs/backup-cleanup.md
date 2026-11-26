@@ -1,9 +1,9 @@
 # Confirmed BACKUP cleanup
 
-Choose an explicit profile and targets and use the All scope for the profile or one of its root collections. `--yes` authorizes BACKUP execution. Removing files from the archive requires approval of the exact list shown during that run.
+Choose an explicit profile and targets and use the All scope for the profile or one of its root collections. `--yes --full-read` enables BACKUP execution with full verification and eligibility for cleanup. Removing files from the archive requires approval of the exact list shown during that run.
 
 ```bash
-media-archive backup --yes --profile data --collection photos --targets a b
+media-archive backup --yes --full-read --profile data --collection photos --targets a b
 ```
 
 The command first budgets the whole selected batch and completes the applicable append and replacement transfers and their verification. It then scans the local and archive trees of the eligible collections on the selected writable targets. A collection needs both its own `COLLECTION_*_ALLOW_DELETE=true` and a policy with `DELETIONS=confirm_each_run`. The example configuration grants this to the three selection stages and the print backlog. Monthly scopes skip cleanup.

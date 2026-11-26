@@ -157,12 +157,16 @@ class Destination:
             return info.f_bavail * unit, unit
 
     def file_size(self) -> int | None:
+        entry = self.file_attributes()
+        return entry.size if entry is not None else None
+
+    def file_attributes(self) -> SourceEntry | None:
         """Check that the destination is a regular file on the expected mount."""
         try:
             with self.parent() as parent:
                 fd = os.open(self.path.name, os.O_PATH | os.O_NOFOLLOW, dir_fd=parent)
                 with _file(fd, self.volume.mount_id):
-                    return os.fstat(fd).st_size
+                    return SourceEntry.from_stat(self.path, os.fstat(fd))
         except FileNotFoundError:
             return None
 

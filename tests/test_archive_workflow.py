@@ -107,7 +107,7 @@ class ArchiveWorkflowTests(unittest.TestCase):
         backup = self._backup()
         copy_status, = backup["Stan kopii BACKUP"]
         self.assertEqual(copy_status["status kopii"], "2/2")
-        self.assertEqual(backup["Plan usunięć"], [])
+        self.assertNotIn("Plan usunięć", backup)
         name, = {row["generacja"] for row in backup["Snapshoty BACKUP"]}
         generations = [self._snapshot_root(alias) / name for alias in self.targets]
         for generation in generations:
@@ -188,7 +188,9 @@ class ArchiveWorkflowTests(unittest.TestCase):
         self.offline.remove(self.targets["b"])
         recovered = self._backup()
         copy_status, = recovered["Stan kopii BACKUP"]
-        self.assertEqual(copy_status["status kopii"], "2/2")
+        self.assertEqual(copy_status["status kopii"], "1/2")
+        self.assertEqual([row["cel"] for row in copy_status["kopie"]], ["b"])
+        self.assertEqual(recovered["Podsumowanie szybkiego BACKUP"][0]["zgodne z historią"], 1)
         self.assertEqual((a_copy.stat().st_ino, a_copy.stat().st_mtime_ns), (before.st_ino, before.st_mtime_ns))
         for alias in self.targets:
             self.assertEqual(self._archive_copy(alias, self.placed).read_bytes(), self.original)
